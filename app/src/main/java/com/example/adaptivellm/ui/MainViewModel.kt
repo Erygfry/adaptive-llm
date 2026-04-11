@@ -100,6 +100,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _availableUpdate = MutableStateFlow<ReleaseInfo?>(null)
     val availableUpdate: StateFlow<ReleaseInfo?> = _availableUpdate.asStateFlow()
 
+    // null = idle, true = checking, false = checked (no update)
+    private val _updateCheckState = MutableStateFlow<Boolean?>(null)
+    val updateCheckState: StateFlow<Boolean?> = _updateCheckState.asStateFlow()
+
     init {
         // Check if a model is already in app's files dir (e.g. pushed via adb)
         val localGguf = findLocalGguf(application)
@@ -111,8 +115,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             loadModel(recommendedModel)
         }
 
-        // Check for app updates on startup
-        checkForUpdates()
+        // Check for app updates on startup (silent — no "up to date" feedback)
+        checkForUpdates(silent = true)
     }
 
     /**
@@ -334,9 +338,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         engine.setThinkingMode(mode)
     }
 
-    fun checkForUpdates() {
+    fun checkForUpdates(silent: Boolean = false) {
         viewModelScope.launch {
-            _availableUpdate.value = UpdateChecker.check(getApplication())
+            if (!silent) _updateCheckState.value = true // checking
+            val result = UpdateChecker.check(getApplication())
+            _availableUpdate.value = result
+            if (!silent) _updateCheckState.value = if (result == null) false else null
         }
     }
 

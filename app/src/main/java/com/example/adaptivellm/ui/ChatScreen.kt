@@ -37,6 +37,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -71,6 +73,16 @@ fun ChatScreen(viewModel: MainViewModel) {
     val loadedModelName by viewModel.loadedModelName.collectAsState()
     val thinkingMode by viewModel.thinkingMode.collectAsState()
     val availableUpdate by viewModel.availableUpdate.collectAsState()
+    val updateCheckState by viewModel.updateCheckState.collectAsState()
+
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Show snackbar when update check completes with no update
+    LaunchedEffect(updateCheckState) {
+        if (updateCheckState == false) {
+            snackbarHostState.showSnackbar("App is up to date")
+        }
+    }
 
     // Update dialog (can also appear in chat)
     availableUpdate?.let { update ->
@@ -106,6 +118,7 @@ fun ChatScreen(viewModel: MainViewModel) {
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 navigationIcon = {
