@@ -1,60 +1,63 @@
 package com.example.adaptivellm.update
 
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.net.Uri
-import android.os.Build
-import android.os.Environment
+import android.util.Log
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 object ApkInstaller {
 
+    private const val TAG = "ApkInstaller"
     private const val APK_NAME = "adaptive-llm-update.apk"
-    private var downloadId: Long = -1
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.MINUTES)
+        .followRedirects(true)
+        .build()
 
     /**
-     * Download APK via system DownloadManager and install when complete.
+     * Download APK from GitHub (with auth for private repos) and launch install.
      */
-    fun downloadAndInstall(context: Context, apkUrl: String) {
-        // Clean up previous download
-        val apkFile = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), APK_NAME)
-        if (apkFile.exists()) apkFile.delete()
+    suspend fun downloadAndInstall(context: Context, apkUrl: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                val apkFile = File(context.cacheDir, "updates/$APK_NAME")
+                apkFile.parentFile?.mkdirs()
+                if (apkFile.exists()) apkFile.delete()
 
-        val request = DownloadManager.Request(Uri.parse(apkUrl))
-            .setTitle("Adaptive LLM Update")
-            .setDescription("Downloading update...")
-            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, APK_NAME)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                // Use GitHub API accept header to get the actual binary
+                val request = Request.Builder()
+                    .url(apkUrl)
+                    .header("Authorization", "Bearer ${UpdateChecker.TOKEN}")
+                    .header("Accept", "application/octet-stream")
+                    .build()
 
-        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        downloadId = dm.enqueue(request)
+                Log.i(TAG, "Downloading APK from: $apkUrl")
+                val response = client.newCall(request).execute()
 
-        // Register receiver for download completion
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-                if (id == downloadId) {
-                    ctx.unregisterReceiver(this)
-                    installApk(ctx, apkFile)
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "Download failed: ${response.code}")
+                    return@withContext
                 }
-            }
-        }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(
-                receiver,
-                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-                Context.RECEIVER_EXPORTED,
-            )
-        } else {
-            context.registerReceiver(
-                receiver,
-                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-            )
+                response.body!!.byteStream().use { input ->
+                    apkFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+
+                Log.i(TAG, "APK downloaded: ${apkFile.length()} bytes")
+                installApk(context, apkFile)
+            } catch (e: Exception) {
+                Log.e(TAG, "Download failed", e)
+            }
         }
     }
 

@@ -20,7 +20,7 @@ object UpdateChecker {
     private const val OWNER = "Erygfry"
     private const val REPO = "adaptive-llm"
     private const val API_URL = "https://api.github.com/repos/$OWNER/$REPO/releases/latest"
-    private const val TOKEN = "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"
+    internal const val TOKEN = "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"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)

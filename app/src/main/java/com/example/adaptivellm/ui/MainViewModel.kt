@@ -386,7 +386,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun installUpdate() {
         val update = _availableUpdate.value ?: return
-        ApkInstaller.downloadAndInstall(getApplication(), update.apkUrl)
+        viewModelScope.launch {
+            ApkInstaller.downloadAndInstall(getApplication(), update.apkUrl)
+        }
     }
 
     fun dismissUpdate() {
