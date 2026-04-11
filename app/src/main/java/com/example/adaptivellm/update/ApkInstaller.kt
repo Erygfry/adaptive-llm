@@ -16,10 +16,17 @@ object ApkInstaller {
     private const val TAG = "ApkInstaller"
     private const val APK_NAME = "adaptive-llm-update.apk"
 
+    // Don't follow redirects automatically — we need to handle the 302 manually
+    // because GitHub redirects to a different domain and OkHttp strips Authorization
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.MINUTES)
-        .followRedirects(true)
+        .followRedirects(false)
+        .build()
+
+    private val downloadClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.MINUTES)
         .build()
 
     /**
@@ -32,15 +39,47 @@ object ApkInstaller {
                 apkFile.parentFile?.mkdirs()
                 if (apkFile.exists()) apkFile.delete()
 
-                // Use GitHub API accept header to get the actual binary
+                // Step 1: Request with auth → GitHub returns 302 redirect
                 val request = Request.Builder()
                     .url(apkUrl)
                     .header("Authorization", "Bearer ${UpdateChecker.TOKEN}")
                     .header("Accept", "application/octet-stream")
                     .build()
 
-                Log.i(TAG, "Downloading APK from: $apkUrl")
-                val response = client.newCall(request).execute()
+                Log.i(TAG, "Requesting APK redirect from: $apkUrl")
+                val redirectResponse = client.newCall(request).execute()
+
+                val downloadUrl = if (redirectResponse.code == 302) {
+                    val location = redirectResponse.header("Location")
+                    redirectResponse.close()
+                    if (location == null) {
+                        Log.e(TAG, "302 but no Location header")
+                        return@withContext
+                    }
+                    Log.i(TAG, "Redirected to: $location")
+                    location
+                } else if (redirectResponse.isSuccessful) {
+                    // Direct download worked (unlikely but handle it)
+                    redirectResponse.body!!.byteStream().use { input ->
+                        apkFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    Log.i(TAG, "APK downloaded directly: ${apkFile.length()} bytes")
+                    installApk(context, apkFile)
+                    return@withContext
+                } else {
+                    Log.e(TAG, "Initial request failed: ${redirectResponse.code}")
+                    redirectResponse.close()
+                    return@withContext
+                }
+
+                // Step 2: Download from redirect URL without auth
+                val downloadRequest = Request.Builder()
+                    .url(downloadUrl)
+                    .build()
+
+                val response = downloadClient.newCall(downloadRequest).execute()
 
                 if (!response.isSuccessful) {
                     Log.e(TAG, "Download failed: ${response.code}")
