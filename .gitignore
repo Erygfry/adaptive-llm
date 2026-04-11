@@ -3,6 +3,7 @@
 .gradle/
 build/
 local.properties
+app/release/
 
 # IDE
 .idea/

@@ -47,6 +47,7 @@ static std::string g_cached_chars;
 static std::ostringstream g_assistant_ss;
 // 0 = AUTO (legacy, model decides), 1 = ALWAYS (force thinking), 2 = NEVER (disable thinking)
 static int g_thinking_mode = 0;
+static bool g_using_gpu = false; // true if model was loaded with GPU layers
 // Speculative decoding state
 static std::vector<llama_token> g_token_history; // all tokens (prompt + generated) for n-gram lookup
 static std::vector<llama_token> g_spec_buffer;   // verified draft tokens waiting to be returned
@@ -331,6 +332,28 @@ extern "C"
 
         llama_model_params params = llama_model_default_params();
         params.n_gpu_layers = (int)nGpuLayers;
+        g_using_gpu = (int)nGpuLayers != 0;
+
+        // When GPU is not requested, restrict to CPU-only devices
+        // to avoid llama.cpp using a registered Vulkan backend
+        // that may not support this device (e.g. Adreno 618)
+        std::vector<ggml_backend_dev_t> cpu_devices;
+        if ((int)nGpuLayers == 0)
+        {
+            for (size_t i = 0; i < ggml_backend_dev_count(); i++)
+            {
+                auto *dev = ggml_backend_dev_get(i);
+                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU ||
+                    ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL)
+                {
+                    cpu_devices.push_back(dev);
+                    LOGi("CPU-only mode: using device '%s'", ggml_backend_dev_name(dev));
+                }
+            }
+            cpu_devices.push_back(nullptr); // null-terminated
+            params.devices = cpu_devices.data();
+        }
+
         g_model = llama_model_load_from_file(path, params);
         env->ReleaseStringUTFChars(jModelPath, path);
 
@@ -654,14 +677,7 @@ extern "C"
     Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeBackendName(
         JNIEnv *env, jobject)
     {
-        // List all loaded backends (registered via ggml_backend_load_all_from_path)
-        std::vector<std::string> backends;
-        for (size_t i = 0; i < ggml_backend_reg_count(); i++)
-        {
-            auto *reg = ggml_backend_reg_get(i);
-            backends.push_back(ggml_backend_reg_name(reg));
-        }
-        std::string result = backends.empty() ? "CPU" : join_strings(backends, ", ");
+        std::string result = g_using_gpu ? "Vulkan + CPU" : "CPU";
         return env->NewStringUTF(result.c_str());
     }
 

@@ -15,6 +15,7 @@ import com.example.adaptivellm.model.ModelDownloader
 import com.example.adaptivellm.model.ModelSelector
 import com.example.adaptivellm.model.ModelVariant
 import com.example.adaptivellm.update.ApkInstaller
+import android.content.Context
 import com.example.adaptivellm.update.ReleaseInfo
 import com.example.adaptivellm.update.UpdateChecker
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +44,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             "Keep answers short and to the point unless the user asks for detail. " +
             "Use markdown formatting for structure when helpful. " +
             "Reply in the same language the user writes in."
+
+        private const val PREFS_NAME = "adaptive_llm_prefs"
+        private const val KEY_VULKAN_CRASHED = "vulkan_crashed"
+        // Minimum RAM to attempt Vulkan (model + KV cache + system overhead)
+        private const val MIN_RAM_FOR_VULKAN_MB = 8_000L
     }
 
     val engine: InferenceEngine = InferenceEngineImpl.getInstance(application)
@@ -187,27 +193,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun shouldUseVulkan(): Boolean {
+        if (!deviceProfile.hasVulkan) return false
+        if (deviceProfile.totalRamMb < MIN_RAM_FOR_VULKAN_MB) return false
+        // Check if Vulkan crashed on a previous launch
+        val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_VULKAN_CRASHED, false)) return false
+        return true
+    }
+
     private fun loadModel(variant: ModelVariant) {
         _loadedModelName.value = variant.displayName
+        val useVulkan = shouldUseVulkan()
+
         viewModelScope.launch {
-            try {
-                val path = downloader.getLocalPath(variant)
-                engine.loadModel(path, nGpuLayers = if (deviceProfile.hasVulkan) -1 else 0)
-                engine.setSystemPrompt(SYSTEM_PROMPT)
-                _backendInfo.value = engine.getBackendName()
-                analyticsLogger.logModelLoaded(
-                    modelName = variant.displayName,
-                    modelSizeMb = variant.fileSizeMb,
-                    backend = engine.getBackendName(),
-                    nThreads = deviceProfile.cpuCores,
-                    nBigCores = deviceProfile.cpuCores, // approximate
-                    quantization = variant.quantization,
-                )
-            } catch (e: Exception) {
-                _messages.value = _messages.value + ChatMessage(
-                    "Error loading model: ${e.message}", isUser = false
-                )
+            val path = downloader.getLocalPath(variant)
+            val success = tryLoadModel(path, variant, useVulkan)
+            if (!success && useVulkan) {
+                // Vulkan failed — retry on CPU
+                val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit().putBoolean(KEY_VULKAN_CRASHED, true).apply()
+                tryLoadModel(path, variant, useVulkan = false)
             }
+        }
+    }
+
+    private suspend fun tryLoadModel(path: String, variant: ModelVariant, useVulkan: Boolean): Boolean {
+        return try {
+            if (useVulkan) {
+                val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit().putBoolean(KEY_VULKAN_CRASHED, true).apply()
+            }
+            engine.loadModel(path, nGpuLayers = if (useVulkan) -1 else 0)
+            if (useVulkan) {
+                val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit().putBoolean(KEY_VULKAN_CRASHED, false).apply()
+            }
+            engine.setSystemPrompt(SYSTEM_PROMPT)
+            _backendInfo.value = engine.getBackendName()
+            analyticsLogger.logModelLoaded(
+                modelName = variant.displayName,
+                modelSizeMb = variant.fileSizeMb,
+                backend = engine.getBackendName(),
+                nThreads = deviceProfile.cpuCores,
+                nBigCores = deviceProfile.cpuCores,
+                quantization = variant.quantization,
+            )
+            true
+        } catch (e: Exception) {
+            _messages.value = _messages.value + ChatMessage(
+                "Error loading model: ${e.message}", isUser = false
+            )
+            false
         }
     }
 
