@@ -80,6 +80,22 @@ class AnalyticsLogger(private val context: Context) {
         }
     }
 
+    /** Log when model loading fails. */
+    fun logModelLoadError(
+        modelName: String,
+        error: String,
+        backend: String,
+    ) {
+        analytics.logEvent("model_load_error") {
+            param("model_name", modelName)
+            param("error", error.take(100)) // Firebase limits param to 100 chars
+            param("backend", backend)
+            param("device_model", Build.MODEL)
+            param("device_soc", Build.HARDWARE)
+            param("ram_total_mb", getTotalRamMb())
+        }
+    }
+
     /** Log when model download completes. */
     fun logModelDownloaded(modelName: String, sizeMb: Long, durationMs: Long) {
         analytics.logEvent("model_downloaded") {

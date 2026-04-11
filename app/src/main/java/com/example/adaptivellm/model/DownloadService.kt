@@ -23,6 +23,7 @@ class DownloadService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var downloader: ModelDownloader
+    private var lastNotificationTime = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -49,13 +50,17 @@ class DownloadService : Service() {
                 _state.value = state
                 when (state) {
                     is DownloadState.Progress -> {
-                        val percent = (state.percent * 100).toInt()
-                        val mb = state.bytesDownloaded / (1024 * 1024)
-                        val totalMb = state.totalBytes / (1024 * 1024)
-                        updateNotification(
-                            "Downloading ${state.label}: $mb / $totalMb MB",
-                            percent,
-                        )
+                        val now = System.currentTimeMillis()
+                        if (now - lastNotificationTime >= 1000) {
+                            lastNotificationTime = now
+                            val percent = (state.percent * 100).toInt()
+                            val mb = state.bytesDownloaded / (1024 * 1024)
+                            val totalMb = state.totalBytes / (1024 * 1024)
+                            updateNotification(
+                                "Downloading ${state.label}: $mb / $totalMb MB",
+                                percent,
+                            )
+                        }
                     }
                     is DownloadState.Complete -> {
                         showCompleteNotification()

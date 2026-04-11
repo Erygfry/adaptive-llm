@@ -27,9 +27,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -176,6 +179,24 @@ fun SetupScreen(viewModel: MainViewModel) {
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (isSelectedDownloaded) "Start Chat" else "Download & Start")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        val context = LocalContext.current
+        val versionName = remember {
+            try {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
+            } catch (_: Exception) { "" }
+        }
+        if (versionName.isNotEmpty()) {
+            Text(
+                text = "v$versionName",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

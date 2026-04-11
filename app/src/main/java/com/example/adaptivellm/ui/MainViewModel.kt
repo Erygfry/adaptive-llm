@@ -241,6 +241,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             true
         } catch (e: Exception) {
+            analyticsLogger.logModelLoadError(
+                modelName = variant.displayName,
+                error = e.message ?: "unknown",
+                backend = if (useVulkan) "Vulkan" else "CPU",
+            )
             _messages.value = _messages.value + ChatMessage(
                 "Error loading model: ${e.message}", isUser = false
             )
