@@ -1,0 +1,24 @@
+# Build
+*.iml
+.gradle/
+build/
+local.properties
+
+# IDE
+.idea/
+*.swp
+
+# NDK
+app/.cxx/
+.externalNativeBuild/
+
+# Keystore
+*.jks
+*.keystore
+
+# Google Services (contains API keys)
+app/google-services.json
+
+# OS
+.DS_Store
+Thumbs.db
