@@ -98,6 +98,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _backendInfo = MutableStateFlow("")
     val backendInfo: StateFlow<String> = _backendInfo.asStateFlow()
 
+    private val _totalTokens = MutableStateFlow(0)
+    val totalTokens: StateFlow<Int> = _totalTokens.asStateFlow()
+
     // Actual loaded model name (not necessarily the recommended one)
     private val _loadedModelName = MutableStateFlow("")
     val loadedModelName: StateFlow<String> = _loadedModelName.asStateFlow()
@@ -314,6 +317,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             _isGenerating.value = false
+            _totalTokens.value += tokenCount
 
             // Log analytics
             val durationMs = System.currentTimeMillis() - startTime
@@ -338,6 +342,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         engine.unloadModel()
         _messages.value = emptyList()
         _tokensPerSecond.value = 0f
+        _totalTokens.value = 0
         _backendInfo.value = ""
         _loadedModelName.value = ""
         refreshDownloadedModels()
@@ -373,6 +378,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         engine.shutdown()
         super.onCleared()
+    }
+
+    fun stopGeneration() {
+        engine.stopGeneration()
     }
 
     fun setThinkingMode(mode: Int) {

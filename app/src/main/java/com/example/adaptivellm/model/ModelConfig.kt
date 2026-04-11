@@ -19,7 +19,7 @@ object ModelCatalog {
 
     val variants = listOf(
         ModelVariant(
-            displayName = "Qwen3.5-4B Q3_K_M",
+            displayName = "Lite",
             parameterSize = "4B",
             quantization = "Q3_K_M",
             fileSizeMb = 2186,
@@ -28,7 +28,7 @@ object ModelCatalog {
             minRamMb = 4_000,
         ),
         ModelVariant(
-            displayName = "Qwen3.5-4B Q4_K_M",
+            displayName = "Standard",
             parameterSize = "4B",
             quantization = "Q4_K_M",
             fileSizeMb = 2576,
@@ -37,7 +37,7 @@ object ModelCatalog {
             minRamMb = 5_000,
         ),
         ModelVariant(
-            displayName = "Qwen3.5-4B Q6_K",
+            displayName = "Quality",
             parameterSize = "4B",
             quantization = "Q6_K",
             fileSizeMb = 3263,

@@ -133,6 +133,10 @@ class InferenceEngineImpl private constructor(
 
     override fun getBackendName(): String = nativeBackendName()
 
+    override fun stopGeneration() {
+        cancelGeneration = true
+    }
+
     override fun unloadModel() {
         cancelGeneration = true
         nativeUnload()

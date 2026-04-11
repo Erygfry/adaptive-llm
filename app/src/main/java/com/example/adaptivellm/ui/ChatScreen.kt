@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DropdownMenu
@@ -72,6 +73,7 @@ fun ChatScreen(viewModel: MainViewModel) {
     val engineState by viewModel.engine.state.collectAsState()
     val loadedModelName by viewModel.loadedModelName.collectAsState()
     val thinkingMode by viewModel.thinkingMode.collectAsState()
+    val totalTokens by viewModel.totalTokens.collectAsState()
     val availableUpdate by viewModel.availableUpdate.collectAsState()
     val updateCheckState by viewModel.updateCheckState.collectAsState()
 
@@ -138,10 +140,11 @@ fun ChatScreen(viewModel: MainViewModel) {
                             loadedModelName.ifEmpty { "Loading..." },
                             style = MaterialTheme.typography.titleMedium,
                         )
+                        val tokenInfo = if (totalTokens > 0) " | $totalTokens/4096" else ""
                         val statusText = when (engineState) {
                             is InferenceEngine.State.LoadingModel -> "Loading model..."
-                            is InferenceEngine.State.Generating -> "%.1f t/s | %s".format(tps, backend)
-                            is InferenceEngine.State.ModelLoaded -> "Ready | $backend"
+                            is InferenceEngine.State.Generating -> "%.1f t/s | %s%s".format(tps, backend, tokenInfo)
+                            is InferenceEngine.State.ModelLoaded -> "Ready | %s%s".format(backend, tokenInfo)
                             is InferenceEngine.State.Error -> "Error"
                             else -> "Initializing..."
                         }
@@ -265,23 +268,32 @@ fun ChatScreen(viewModel: MainViewModel) {
                     }
                 }
 
-                // Send button
-                IconButton(
-                    onClick = {
-                        if (inputText.isNotBlank()) {
-                            viewModel.sendMessage(inputText)
-                            inputText = ""
-                        }
-                    },
-                    enabled = inputText.isNotBlank() &&
-                            engineState is InferenceEngine.State.ModelLoaded &&
-                            !isGenerating,
-                ) {
-                    Icon(
-                        Icons.Default.Send,
-                        contentDescription = "Send",
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
+                // Send / Stop button
+                if (isGenerating) {
+                    IconButton(onClick = { viewModel.stopGeneration() }) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Stop generation",
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = {
+                            if (inputText.isNotBlank()) {
+                                viewModel.sendMessage(inputText)
+                                inputText = ""
+                            }
+                        },
+                        enabled = inputText.isNotBlank() &&
+                                engineState is InferenceEngine.State.ModelLoaded,
+                    ) {
+                        Icon(
+                            Icons.Default.Send,
+                            contentDescription = "Send",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
             }
         }

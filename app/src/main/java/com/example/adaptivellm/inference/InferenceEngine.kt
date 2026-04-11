@@ -13,6 +13,7 @@ interface InferenceEngine {
     suspend fun bench(pp: Int = 512, tg: Int = 128, pl: Int = 1, nr: Int = 1): String
     fun getSystemInfo(): String
     fun getBackendName(): String
+    fun stopGeneration()
     fun unloadModel()
     fun shutdown()
     // 0 = AUTO, 1 = ALWAYS, 2 = NEVER
