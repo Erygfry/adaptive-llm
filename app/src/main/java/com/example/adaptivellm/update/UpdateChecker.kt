@@ -57,7 +57,8 @@ object UpdateChecker {
                 val asset = assets.getJSONObject(i)
                 val name = asset.getString("name")
                 if (name.endsWith(".apk")) {
-                    apkUrl = asset.getString("browser_download_url")
+                    // Use API URL (not browser_download_url) for private repos
+                    apkUrl = asset.getString("url")
                     break
                 }
             }
