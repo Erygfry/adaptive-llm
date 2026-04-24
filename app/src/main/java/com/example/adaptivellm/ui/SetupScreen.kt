@@ -24,6 +24,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -50,22 +51,45 @@ fun SetupScreen(viewModel: MainViewModel) {
     val availableUpdate by viewModel.availableUpdate.collectAsState()
 
     // Update dialog
+    val updateProgress by com.example.adaptivellm.update.ApkInstaller.progress.collectAsState()
     availableUpdate?.let { update ->
         AlertDialog(
-            onDismissRequest = { viewModel.dismissUpdate() },
-            title = { Text("Update available: v${update.versionName}") },
+            onDismissRequest = { if (updateProgress == null) viewModel.dismissUpdate() },
+            title = { Text(if (updateProgress != null) "Updating..." else "Update available: v${update.versionName}") },
             text = {
-                if (update.releaseNotes.isNotBlank()) {
-                    Text(update.releaseNotes)
+                Column {
+                    if (updateProgress != null) {
+                        val pct = updateProgress!!
+                        if (pct >= 0) {
+                            Text("Downloading: $pct%")
+                            Spacer(modifier = Modifier.height(8.dp))
+                            LinearProgressIndicator(
+                                progress = { pct / 100f },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            Text("Installing...")
+                            Spacer(modifier = Modifier.height(8.dp))
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    } else if (update.releaseNotes.isNotBlank()) {
+                        Text(update.releaseNotes)
+                    }
                 }
             },
             confirmButton = {
-                Button(onClick = { viewModel.installUpdate() }) {
+                Button(
+                    onClick = { viewModel.installUpdate() },
+                    enabled = updateProgress == null,
+                ) {
                     Text("Update")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { viewModel.dismissUpdate() }) {
+                TextButton(
+                    onClick = { viewModel.dismissUpdate() },
+                    enabled = updateProgress == null,
+                ) {
                     Text("Later")
                 }
             },
