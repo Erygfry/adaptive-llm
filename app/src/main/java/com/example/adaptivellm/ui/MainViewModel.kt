@@ -136,6 +136,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        analyticsLogger.logSessionStart()
+
         // Check for app updates on startup (silent — no "up to date" feedback)
         checkForUpdates(silent = true)
     }
@@ -395,6 +397,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        analyticsLogger.logSessionEnd()
         engine.shutdown()
         super.onCleared()
     }

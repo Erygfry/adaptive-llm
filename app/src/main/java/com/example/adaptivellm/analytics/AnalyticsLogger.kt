@@ -21,6 +21,24 @@ class AnalyticsLogger(private val context: Context) {
             prefs.edit().putString("device_id", it).apply()
         }
     }
+    private var sessionId: String = java.util.UUID.randomUUID().toString().take(8)
+
+    fun logSessionStart() {
+        sessionId = java.util.UUID.randomUUID().toString().take(8)
+        logToFirestore("session_start", mapOf(
+            "device_model" to Build.MODEL,
+            "device_soc" to Build.HARDWARE,
+            "android_sdk" to Build.VERSION.SDK_INT,
+            "ram_total_mb" to getTotalRamMb(),
+            "battery_percent" to getBatteryPercent(),
+        ))
+    }
+
+    fun logSessionEnd() {
+        logToFirestore("session_end", mapOf(
+            "battery_percent" to getBatteryPercent(),
+        ))
+    }
 
     /** Log once when a model is loaded. */
     fun logModelLoaded(
@@ -165,6 +183,7 @@ class AnalyticsLogger(private val context: Context) {
     private fun logToFirestore(event: String, data: Map<String, Any>) {
         val doc = data.toMutableMap()
         doc["device_id"] = deviceId
+        doc["session_id"] = sessionId
         doc["timestamp"] = com.google.firebase.Timestamp.now()
         doc["app_version"] = try {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
