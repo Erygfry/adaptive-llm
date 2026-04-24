@@ -46,6 +46,9 @@ class InferenceEngineImpl private constructor(
     private external fun nativeUnload()
     private external fun nativeShutdown()
     private external fun nativeSetThinkingMode(mode: Int)
+    private external fun nativeGetCurrentPos(): Int
+    private external fun nativeWasThinkingDisabled(): Boolean
+
 
 
     private val _state = MutableStateFlow<InferenceEngine.State>(InferenceEngine.State.Idle)
@@ -150,8 +153,10 @@ class InferenceEngineImpl private constructor(
         _state.value = InferenceEngine.State.Idle
     }
     override fun setThinkingMode(mode: Int) {
-        nativeSetThinkingMode(mode) 
+        nativeSetThinkingMode(mode)
     }
 
+    override fun getCurrentPos(): Int = nativeGetCurrentPos()
 
+    override fun wasThinkingDisabled(): Boolean = nativeWasThinkingDisabled()
 }

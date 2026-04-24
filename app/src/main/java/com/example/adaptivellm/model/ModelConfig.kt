@@ -25,7 +25,7 @@ object ModelCatalog {
             fileSizeMb = 2186,
             huggingFaceRepo = HF_REPO,
             fileName = "Qwen3.5-4B-Q3_K_M.gguf",
-            minRamMb = 4_000,
+            minRamMb = 6_000,
         ),
         ModelVariant(
             displayName = "Standard",
@@ -34,7 +34,7 @@ object ModelCatalog {
             fileSizeMb = 2576,
             huggingFaceRepo = HF_REPO,
             fileName = "Qwen3.5-4B-Q4_K_M.gguf",
-            minRamMb = 5_000,
+            minRamMb = 8_000,
         ),
         ModelVariant(
             displayName = "Quality",
@@ -43,7 +43,7 @@ object ModelCatalog {
             fileSizeMb = 3263,
             huggingFaceRepo = HF_REPO,
             fileName = "Qwen3.5-4B-Q6_K.gguf",
-            minRamMb = 6_000,
+            minRamMb = 10_000,
         ),
     )
 }

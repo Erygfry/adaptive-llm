@@ -11,6 +11,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -25,6 +26,10 @@ fun DownloadScreen(viewModel: MainViewModel) {
     val state by viewModel.downloadState.collectAsState()
     val model by viewModel.selectedModel.collectAsState()
 
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
+    ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -105,5 +110,6 @@ fun DownloadScreen(viewModel: MainViewModel) {
                 Text("Preparing...", style = MaterialTheme.typography.bodyLarge)
             }
         }
+    }
     }
 }

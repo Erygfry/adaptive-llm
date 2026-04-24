@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material3.Surface
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -71,6 +72,10 @@ fun SetupScreen(viewModel: MainViewModel) {
         )
     }
 
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
+    ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -161,68 +166,93 @@ fun SetupScreen(viewModel: MainViewModel) {
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        viewModel.compatibleModels.forEach { (size, variants) ->
-            Text(
-                "$size Parameters",
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-            variants.forEach { variant ->
-                val isDownloaded = downloadedModels.contains(variant.fileName)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { viewModel.selectModel(variant) }
-                        .padding(vertical = 4.dp),
-                ) {
-                    RadioButton(
-                        selected = variant == selectedModel,
-                        onClick = { viewModel.selectModel(variant) },
+        if (viewModel.compatibleModels.isEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                ),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Device Not Supported",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
                     )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(variant.displayName, style = MaterialTheme.typography.bodyMedium)
-                            if (isDownloaded) {
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "Downloaded",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "This device does not have enough RAM to run any available model. " +
+                            "At least 6 GB of RAM is required.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+        } else {
+            viewModel.compatibleModels.forEach { (size, variants) ->
+                Text(
+                    "$size Parameters",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                variants.forEach { variant ->
+                    val isDownloaded = downloadedModels.contains(variant.fileName)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.selectModel(variant) }
+                            .padding(vertical = 4.dp),
+                    ) {
+                        RadioButton(
+                            selected = variant == selectedModel,
+                            onClick = { viewModel.selectModel(variant) },
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(variant.displayName, style = MaterialTheme.typography.bodyMedium)
+                                if (isDownloaded) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        "Downloaded",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                            Text(
+                                "${variant.fileSizeMb} MB | min RAM: ${variant.minRamMb / 1024} GB",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (isDownloaded) {
+                            IconButton(
+                                onClick = { viewModel.deleteModel(variant) },
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "Delete model",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(20.dp),
                                 )
                             }
-                        }
-                        Text(
-                            "${variant.fileSizeMb} MB | min RAM: ${variant.minRamMb / 1024} GB",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (isDownloaded) {
-                        IconButton(
-                            onClick = { viewModel.deleteModel(variant) },
-                            modifier = Modifier.size(36.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Delete model",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(20.dp),
-                            )
                         }
                     }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-        val isSelectedDownloaded = downloadedModels.contains(selectedModel.fileName)
-        Button(
-            onClick = { viewModel.startDownload() },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (isSelectedDownloaded) "Start Chat" else "Download & Start")
+            val isSelectedDownloaded = downloadedModels.contains(selectedModel.fileName)
+            Button(
+                onClick = { viewModel.startDownload() },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isSelectedDownloaded) "Start Chat" else "Download & Start")
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -242,5 +272,6 @@ fun SetupScreen(viewModel: MainViewModel) {
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+    }
     }
 }

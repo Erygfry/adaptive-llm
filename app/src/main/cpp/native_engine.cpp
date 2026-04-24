@@ -30,6 +30,8 @@ static constexpr int N_THREADS_MIN = 2;
 static constexpr int N_THREADS_MAX = 6;
 static constexpr int N_THREADS_HEADROOM = 2;
 static constexpr float DEFAULT_TEMP = 0.3f;
+static constexpr int SOFT_LIMIT_THINKING = 1024; // thinking mode — chain-of-thought easily eats 1000+ tokens
+static constexpr int SOFT_LIMIT_NORMAL   = 128;  // no thinking — shorter buffer is enough
 
 // --- Global state ---
 static llama_model *g_model = nullptr;
@@ -48,6 +50,7 @@ static std::ostringstream g_assistant_ss;
 // 0 = AUTO (legacy, model decides), 1 = ALWAYS (force thinking), 2 = NEVER (disable thinking)
 static int g_thinking_mode = 0;
 static bool g_using_gpu = false; // true if model was loaded with GPU layers
+static bool g_thinking_disabled_by_context = false; // true when thinking was auto-disabled due to low context
 // Speculative decoding state
 static std::vector<llama_token> g_token_history; // all tokens (prompt + generated) for n-gram lookup
 static std::vector<llama_token> g_spec_buffer;   // verified draft tokens waiting to be returned
@@ -181,13 +184,42 @@ static std::string join_strings(const std::vector<std::string> &v, const std::st
     return s.str();
 }
 
-static void shift_context()
+// Check if the model supports context shifting.
+// seq_add requires n_pos_per_embd == 1, which is NOT the case for models
+// with multi-rope (MROPE/IMROPE) like Qwen3.5 — positions can't be linearly shifted.
+static bool g_can_shift = false;
+
+static void detect_shift_support()
 {
+    auto rope = llama_model_rope_type(g_model);
+    g_can_shift = (rope != LLAMA_ROPE_TYPE_MROPE && rope != LLAMA_ROPE_TYPE_IMROPE);
+    LOGi("Context shift support: %s (rope_type=%d)", g_can_shift ? "yes" : "no", (int)rope);
+}
+
+// Returns the soft limit headroom based on current thinking mode.
+// AUTO (0) uses thinking headroom since the model may decide to think.
+static int get_soft_limit()
+{
+    return (g_thinking_mode == 2) ? SOFT_LIMIT_NORMAL : SOFT_LIMIT_THINKING;
+}
+
+// Returns true if shift succeeded, false if not supported
+static bool shift_context()
+{
+    if (!g_can_shift)
+    {
+        LOGw("shift_context: not supported for this model (multi-rope), ending generation");
+        return false;
+    }
+
     const int n_discard = (g_current_pos - g_system_pos) / 2;
     LOGi("shift_context: discarding %d tokens", n_discard);
-    llama_memory_seq_rm(llama_get_memory(g_context), 0, g_system_pos, g_system_pos + n_discard);
-    llama_memory_seq_add(llama_get_memory(g_context), 0, g_system_pos + n_discard, g_current_pos, -n_discard);
+
+    auto *mem = llama_get_memory(g_context);
+    llama_memory_seq_rm(mem, 0, g_system_pos, g_system_pos + n_discard);
+    llama_memory_seq_add(mem, 0, g_system_pos + n_discard, g_current_pos, -n_discard);
     g_current_pos -= n_discard;
+    return true;
 }
 
 static std::string chat_add_and_format(const std::string &role, const std::string &content)
@@ -227,7 +259,8 @@ static int decode_in_batches(const llama_tokens &tokens, llama_pos start, bool l
 
         if (start + i + n >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM)
         {
-            shift_context();
+            if (!shift_context())
+                return 1; // context full, can't shift
         }
 
         for (int j = 0; j < n; j++)
@@ -422,6 +455,7 @@ extern "C"
         sparams.penalty_last_n = 64;
         g_sampler = common_sampler_init(g_model, sparams);
 
+        detect_shift_support();
         reset_chat_state(false);
         LOGi("Model loaded successfully");
         return 0;
@@ -489,13 +523,52 @@ extern "C"
         std::string prompt(raw);
         env->ReleaseStringUTFChars(jPrompt, raw);
 
+        // Auto-disable thinking when context is running low:
+        // if remaining space < soft limit, thinking would eat all tokens
+        // and leave nothing for the visible response.
+        // g_thinking_mode stays changed until Kotlin calls setThinkingMode() or
+        // next processUserPrompt — so the Kotlin-side parser sees the real mode.
+        g_thinking_disabled_by_context = false;
+        if (!g_can_shift && g_thinking_mode == 1) // only ALWAYS mode — AUTO uses legacy path
+        {
+            int space_left = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM - g_current_pos;
+            if (space_left < SOFT_LIMIT_THINKING)
+            {
+                LOGi("Context low (%d tokens left) — disabling thinking for this turn",
+                     space_left);
+                g_thinking_disabled_by_context = true;
+                g_thinking_mode = 2; // NEVER for this generation
+            }
+        }
+
         bool has_tmpl = common_chat_templates_was_explicit(g_chat_templates.get());
         std::string formatted = has_tmpl ? chat_add_and_format("user", prompt) : prompt;
 
         auto tokens = common_tokenize(g_context, formatted, has_tmpl, has_tmpl);
-        g_token_history.insert(g_token_history.end(), tokens.begin(), tokens.end());
 
         int n = (int)tokens.size();
+
+        // If context is nearly full and we can't shift, reset to system prompt
+        if (g_current_pos + n >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM && !g_can_shift)
+        {
+            LOGw("Context full and shift not supported — resetting to system prompt");
+            llama_memory_clear(llama_get_memory(g_context), false);
+            g_current_pos = 0;
+            g_chat_msgs.clear();
+            g_token_history.clear();
+
+            // Re-process system prompt if we had one
+            if (g_system_pos > 0)
+            {
+                // We don't have the original system prompt text, but we have its
+                // token count. Unfortunately we need to re-decode it.
+                // For now, just reset positions — the system prompt is lost,
+                // but at least the chat continues.
+                g_system_pos = 0;
+            }
+        }
+
+        g_token_history.insert(g_token_history.end(), tokens.begin(), tokens.end());
 
         if (n > DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM)
         {
@@ -508,6 +581,14 @@ extern "C"
             return 2;
 
         g_current_pos += n;
+
+        // Clamp nPredict so generation can't exceed hard context limit
+        int remaining = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM - g_current_pos;
+        if (remaining < nPredict)
+        {
+            LOGi("Clamped nPredict from %d to %d (context running low)", nPredict, std::max(remaining, 0));
+            nPredict = std::max(remaining, 0);
+        }
         g_stop_pos = g_current_pos + nPredict;
         LOGi("User prompt processed: %d tokens, will generate up to pos %d", n, g_stop_pos);
         return 0;
@@ -541,10 +622,18 @@ extern "C"
 
         // ── 2. Context overflow / stop checks ──
         if (g_current_pos >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM)
-            shift_context();
+        {
+            if (!shift_context())
+                return nullptr; // hard limit — end generation
+        }
 
         if (g_current_pos >= g_stop_pos)
             return nullptr;
+
+        // Soft limit: we're running low on context — disable speculative decoding
+        // to conserve tokens, but let the model finish its current response
+        bool in_soft_zone = (!g_can_shift &&
+            g_current_pos >= DEFAULT_CONTEXT_SIZE - get_soft_limit());
 
         // ── 3. Sample next token ──
         llama_token id = common_sampler_sample(g_sampler, g_context, g_next_logit_idx);
@@ -556,7 +645,9 @@ extern "C"
             return nullptr;
 
         // ── 4. Try speculative drafting ──
-        llama_tokens draft = common_ngram_simple_draft(g_ngram_config, g_token_history, id);
+        llama_tokens draft;
+        if (!in_soft_zone)
+            draft = common_ngram_simple_draft(g_ngram_config, g_token_history, id);
 
         // Limit draft to not exceed stop position or context
         int budget = std::min(
@@ -814,6 +905,21 @@ extern "C"
         JNIEnv *, jobject, jint mode)
     {
         g_thinking_mode = (int)mode;
+        g_thinking_disabled_by_context = false;
+    }
+
+    JNIEXPORT jint JNICALL
+    Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeGetCurrentPos(
+        JNIEnv *, jobject)
+    {
+        return (jint)g_current_pos;
+    }
+
+    JNIEXPORT jboolean JNICALL
+    Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeWasThinkingDisabled(
+        JNIEnv *, jobject)
+    {
+        return (jboolean)g_thinking_disabled_by_context;
     }
 
 } // extern "C"

@@ -114,14 +114,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val updateCheckState: StateFlow<Boolean?> = _updateCheckState.asStateFlow()
 
     init {
-        // Check if a model is already in app's files dir (e.g. pushed via adb)
-        val localGguf = findLocalGguf(application)
-        if (localGguf != null) {
+        // Find the best downloaded model from the catalog (respects Vulkan, etc.)
+        val downloadedVariant = ModelCatalog.variants
+            .filter { downloader.isDownloaded(it) }
+            .sortedWith(
+                compareByDescending<ModelVariant> { it.parameterSize }
+                    .thenByDescending { it.quantization }
+            )
+            .firstOrNull()
+
+        if (downloadedVariant != null) {
             _screen.value = AppScreen.Chat
-            loadModelFromPath(localGguf)
-        } else if (downloader.isDownloaded(recommendedModel)) {
-            _screen.value = AppScreen.Chat
-            loadModel(recommendedModel)
+            _selectedModel.value = downloadedVariant
+            loadModel(downloadedVariant)
+        } else {
+            // Fallback: check for any .gguf pushed manually via adb (dev/testing only)
+            val localGguf = findLocalGguf(application)
+            if (localGguf != null) {
+                _screen.value = AppScreen.Chat
+                loadModelFromPath(localGguf)
+            }
         }
 
         // Check for app updates on startup (silent — no "up to date" feedback)
@@ -271,6 +283,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _messages.value = _messages.value + ChatMessage("", isUser = false)
 
             val thinkRegex = Regex("<think>([\\s\\S]*?)</think>\\s*")
+            // Check if thinking was auto-disabled due to low context
+            val thinkingActive = _thinkingMode.value == 1 && !engine.wasThinkingDisabled()
 
             engine.sendMessage(text).collect { token ->
                 responseBuilder.append(token)
@@ -294,11 +308,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // AUTO mode: <think> started but not yet closed
                     thinkContent = raw.substringAfter("<think>").trim()
                     displayText = ""
-                } else if (_thinkingMode.value == 1 && raw.contains("</think>")) {
+                } else if (thinkingActive && raw.contains("</think>")) {
                     // ALWAYS mode: opening <think> is in the prompt, not in generated text
                     thinkContent = raw.substringBefore("</think>").trim()
                     displayText = raw.substringAfter("</think>").trim()
-                } else if (_thinkingMode.value == 1 && !raw.contains("</think>")) {
+                } else if (thinkingActive && !raw.contains("</think>")) {
                     // ALWAYS mode: still generating thinking (no </think> yet)
                     thinkContent = raw.trim()
                     displayText = ""
@@ -317,7 +331,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             _isGenerating.value = false
-            _totalTokens.value += tokenCount
+            _totalTokens.value = engine.getCurrentPos()
+
+            // Restore thinking mode if it was auto-disabled due to low context
+            if (engine.wasThinkingDisabled()) {
+                engine.setThinkingMode(_thinkingMode.value)
+            }
 
             // Log analytics
             val durationMs = System.currentTimeMillis() - startTime

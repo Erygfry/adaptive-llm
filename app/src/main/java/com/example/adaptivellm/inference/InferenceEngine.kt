@@ -18,7 +18,8 @@ interface InferenceEngine {
     fun shutdown()
     // 0 = AUTO, 1 = ALWAYS, 2 = NEVER
     fun setThinkingMode(mode: Int)
-
+    fun getCurrentPos(): Int
+    fun wasThinkingDisabled(): Boolean
 
     sealed class State {
         data object Idle : State()
