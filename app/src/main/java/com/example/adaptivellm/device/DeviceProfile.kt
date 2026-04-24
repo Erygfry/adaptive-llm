@@ -26,8 +26,7 @@ data class DeviceProfile(
         appendLine("SoC: $socModel")
         appendLine("RAM: ${totalRamMb / 1024} GB")
         appendLine("CPU cores: $cpuCores")
-        appendLine("CPU features: ${cpuFeatures.joinToString(", ")}")
-        appendLine("Vulkan: ${if (hasVulkan) "Yes" else "No"}")
+        append("CPU features: ${cpuFeatures.joinToString(", ")}")
     }
 }
 
