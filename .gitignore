@@ -20,6 +20,9 @@ app/.cxx/
 # Google Services (contains API keys)
 app/google-services.json
 
+# Kotlin compiler sessions
+.kotlin/
+
 # OS
 .DS_Store
 Thumbs.db
