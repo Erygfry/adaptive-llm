@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.adaptivellm.analytics.AnalyticsLogger
 import com.example.adaptivellm.device.DeviceDetector
 import com.example.adaptivellm.device.DeviceProfile
+import com.example.adaptivellm.device.RamTier
 import com.example.adaptivellm.inference.InferenceEngine
 import com.example.adaptivellm.inference.InferenceEngineImpl
 import com.example.adaptivellm.model.DownloadService
@@ -60,6 +61,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val deviceProfile: DeviceProfile = DeviceDetector.detect(application)
     val recommendedModel: ModelVariant = ModelSelector.recommend(deviceProfile)
     val compatibleModels = ModelSelector.compatibleModels(deviceProfile)
+    /** Context size that engine will be (or is) loaded with — based on device's RAM tier. */
+    val nCtx: Int = contextSizeFor(deviceProfile.ramTier)
 
     // Set of filenames that are already downloaded (reactive)
     private val _downloadedModels = MutableStateFlow(
@@ -165,9 +168,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?: fileName.removeSuffix(".gguf")
         viewModelScope.launch {
             try {
-                engine.loadModel(path, nGpuLayers)
-                engine.setSystemPrompt(SYSTEM_PROMPT)
+                // Атомарная загрузка — закрывает race с unloadModel при back-navigation.
+                engine.loadModelWithSystemPrompt(
+                    path = path,
+                    nGpuLayers = nGpuLayers,
+                    nCtx = contextSizeFor(deviceProfile.ramTier),
+                    prompt = SYSTEM_PROMPT,
+                )
                 _backendInfo.value = engine.getBackendName()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // User cancelled load via goBackToSetup — silent, no UI error.
+                throw e
             } catch (e: Exception) {
                 _messages.value = _messages.value + ChatMessage(
                     "Error loading model: ${e.message}", isUser = false
@@ -219,6 +230,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return true
     }
 
+    /**
+     * Размер контекста по RAM tier (см. architecture.md, § Параметры по группам контекста).
+     * Тиры откалиброваны на reported usable RAM, не nominal — соответствие см.
+     * DeviceProfile.kt. Размеры kv_cache.bin (q4_0 Qwen3.5 hybrid):
+     *   - MID (~5 GB reported, 6 GB nominal)       → 6144 ctx, ~104 MB KV
+     *   - UPPER_MID (~7 GB reported, 8 GB nominal) → 8192 ctx, ~122 MB KV
+     *   - HIGH (~10+ GB reported, 12+ GB nominal)  → 16384 ctx, ~195 MB KV
+     *   - LOW / VERY_LOW                           → 6144 floor (модели всё равно
+     *     не грузятся через ModelCatalog.minRamMb, но валидный fallback на всякий случай)
+     */
+    private fun contextSizeFor(tier: RamTier): Int = when (tier) {
+        RamTier.HIGH -> 16384
+        RamTier.UPPER_MID -> 8192
+        RamTier.MID -> 6144
+        RamTier.LOW, RamTier.VERY_LOW -> 6144
+    }
+
     private fun loadModel(variant: ModelVariant) {
         _loadedModelName.value = variant.displayName
         val useVulkan = shouldUseVulkan()
@@ -241,12 +269,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 prefs.edit().putBoolean(KEY_VULKAN_CRASHED, true).apply()
             }
-            engine.loadModel(path, nGpuLayers = if (useVulkan) -1 else 0)
+            // Атомарная загрузка модели + system prompt в одной операции на llamaDispatcher.
+            // Защищает от race condition с unloadModel при back-navigation во время
+            // загрузки модели — без этого SIGSEGV в common_chat_templates_was_explicit
+            // (см. crash log от 2026-05-12 19:57: g_chat_templates освобождён в unload
+            // между loadModel и setSystemPrompt, потом setSystemPrompt падает).
+            engine.loadModelWithSystemPrompt(
+                path = path,
+                nGpuLayers = if (useVulkan) -1 else 0,
+                nCtx = contextSizeFor(deviceProfile.ramTier),
+                prompt = SYSTEM_PROMPT,
+            )
             if (useVulkan) {
                 val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 prefs.edit().putBoolean(KEY_VULKAN_CRASHED, false).apply()
             }
-            engine.setSystemPrompt(SYSTEM_PROMPT)
             _backendInfo.value = engine.getBackendName()
             analyticsLogger.logModelLoaded(
                 modelName = variant.displayName,
@@ -257,6 +294,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 quantization = variant.quantization,
             )
             true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // User cancelled load via goBackToSetup. Не считаем ошибкой — ни UI message,
+            // ни analytics error. КРИТИЧНО: если Vulkan crash flag был выставлен
+            // pre-emptively выше (для real-crash detection), нужно его сбросить —
+            // cancel ≠ crash, Vulkan по-прежнему работоспособен. Без этого следующий
+            // запуск откажется от Vulkan навсегда.
+            if (useVulkan) {
+                val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit().putBoolean(KEY_VULKAN_CRASHED, false).apply()
+            }
+            throw e
         } catch (e: Exception) {
             analyticsLogger.logModelLoadError(
                 modelName = variant.displayName,
@@ -360,15 +408,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun goBackToSetup() {
-        engine.unloadModel()
-        _messages.value = emptyList()
-        _tokensPerSecond.value = 0f
-        _totalTokens.value = 0
-        _backendInfo.value = ""
-        _loadedModelName.value = ""
-        refreshDownloadedModels()
-        _screen.value = AppScreen.Setup
+        viewModelScope.launch {
+            // Order matters: оба cancel-сигнала ставятся ПЕРЕД unloadModel, чтобы:
+            //   - Если идёт model load → progress_callback видит флаг → abort в течение
+            //     миллисекунд → llamaDispatcher освобождается → unloadModel запускается
+            //     почти сразу (вместо 5-10 сек ожидания полной загрузки модели).
+            //   - Если идёт generation → cancelGeneration флаг видит loop в sendMessage
+            //     flow → выход + cancelAndCleanKV → unloadModel запускается дальше.
+            engine.cancelLoading()        // flag для model load
+            engine.stopGeneration()       // flag для generation
+            engine.unloadModel()          // ждёт завершения текущей операции на llamaDispatcher
+            _messages.value = emptyList()
+            _tokensPerSecond.value = 0f
+            _totalTokens.value = 0
+            _backendInfo.value = ""
+            _loadedModelName.value = ""
+            refreshDownloadedModels()
+            _screen.value = AppScreen.Setup
+        }
     }
+
 
     fun deleteModel(variant: ModelVariant) {
         val modelFile = File(downloader.getLocalPath(variant))

@@ -8,12 +8,19 @@ data class DeviceProfile(
     val socModel: String,
     val deviceModel: String,
 ) {
+    // Пороги откалиброваны против `ActivityManager.MemoryInfo.totalMem`, который
+    // возвращает USABLE RAM (после Android system reserve — обычно на 1-2 GB ниже
+    // nominal). Соответствие nominal vs reported:
+    //   12 GB nominal → ~10-11 GB reported → HIGH (Pixel 9 etc.)
+    //   8 GB nominal  → ~7 GB reported     → UPPER_MID
+    //   6 GB nominal  → ~5 GB reported     → MID (Galaxy A80, Xiaomi Pad 5 etc.)
+    //   4 GB nominal  → ~3.5 GB reported   → LOW (модели не грузятся, "not supported")
     val ramTier: RamTier
         get() = when {
-            totalRamMb >= 12_000 -> RamTier.HIGH
-            totalRamMb >= 8_000  -> RamTier.UPPER_MID
-            totalRamMb >= 6_000  -> RamTier.MID
-            totalRamMb >= 4_000  -> RamTier.LOW
+            totalRamMb >= 10_000 -> RamTier.HIGH
+            totalRamMb >= 7_000  -> RamTier.UPPER_MID
+            totalRamMb >= 5_000  -> RamTier.MID
+            totalRamMb >= 3_500  -> RamTier.LOW
             else                 -> RamTier.VERY_LOW
         }
 

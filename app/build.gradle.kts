@@ -13,6 +13,7 @@ android {
     ndkVersion = "29.0.13113456"
 
     defaultConfig {
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         applicationId = "com.example.adaptivellm"
         minSdk = 28
         targetSdk = 36
@@ -114,4 +115,8 @@ dependencies {
     // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
+
+
 }

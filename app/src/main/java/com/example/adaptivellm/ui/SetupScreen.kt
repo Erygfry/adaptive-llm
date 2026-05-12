@@ -246,7 +246,7 @@ fun SetupScreen(viewModel: MainViewModel) {
                                 }
                             }
                             Text(
-                                "${variant.fileSizeMb} MB | min RAM: ${variant.minRamMb / 1024} GB",
+                                "${variant.fileSizeMb} MB | min RAM: ${variant.nominalMinRamGb} GB",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

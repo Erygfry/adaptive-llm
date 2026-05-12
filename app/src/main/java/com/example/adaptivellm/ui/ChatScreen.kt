@@ -63,7 +63,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.unit.dp
 import com.example.adaptivellm.inference.InferenceEngine
 
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(viewModel: MainViewModel) {
@@ -164,7 +163,7 @@ fun ChatScreen(viewModel: MainViewModel) {
                             loadedModelName.ifEmpty { "Loading..." },
                             style = MaterialTheme.typography.titleMedium,
                         )
-                        val tokenInfo = if (totalTokens > 0) " | $totalTokens/4096" else ""
+                        val tokenInfo = if (totalTokens > 0) " | $totalTokens/${viewModel.nCtx}" else ""
                         val statusText = when (engineState) {
                             is InferenceEngine.State.LoadingModel -> "Loading model..."
                             is InferenceEngine.State.Generating -> "%.1f t/s | %s%s".format(tps, backend, tokenInfo)
