@@ -15,6 +15,7 @@ import com.example.adaptivellm.model.ModelCatalog
 import com.example.adaptivellm.model.ModelDownloader
 import com.example.adaptivellm.model.ModelSelector
 import com.example.adaptivellm.model.ModelVariant
+import com.example.adaptivellm.storage.MemoryDatabaseHelper
 import com.example.adaptivellm.update.ApkInstaller
 import android.content.Context
 import com.example.adaptivellm.update.ReleaseInfo
@@ -117,6 +118,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val updateCheckState: StateFlow<Boolean?> = _updateCheckState.asStateFlow()
 
     init {
+        // Initialize memory database (Stage 0 — schema + sqlite-vec ready). Запускается
+        // независимо от chat flow — БД нужна для retrieval (Phase 1) и persistence
+        // (Phase 5), но не блокирует loading модели. Если упадёт — log + ничего не
+        // делаем; chat продолжит работать без памяти (degraded mode).
+        viewModelScope.launch {
+            try {
+                MemoryDatabaseHelper.initialize(application)
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "MemoryDatabase init failed — memory features disabled", e)
+            }
+        }
+
         // Find the best downloaded model from the catalog (respects Vulkan, etc.)
         val downloadedVariant = ModelCatalog.variants
             .filter { downloader.isDownloaded(it) }
@@ -458,6 +471,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         analyticsLogger.logSessionEnd()
         engine.shutdown()
+        // shutdown DB через runBlocking — onCleared не suspend и мы должны успеть
+        // закрыть DB файл (WAL checkpoint, finalize statements) до завершения процесса.
+        // Это короткая операция (миллисекунды). Если повиснет — process kill всё
+        // равно очистит file lock.
+        try {
+            kotlinx.coroutines.runBlocking { MemoryDatabaseHelper.shutdown() }
+        } catch (e: Exception) {
+            android.util.Log.w("MainViewModel", "MemoryDatabase shutdown failed", e)
+        }
         super.onCleared()
     }
 

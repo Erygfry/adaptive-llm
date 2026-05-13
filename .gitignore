@@ -26,3 +26,8 @@ app/google-services.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Local DB dumps from device (for debugging only)
+/memory.db
+/memory.db-wal
+/memory.db-shm
