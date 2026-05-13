@@ -58,6 +58,9 @@ android {
 
     buildFeatures {
         compose = true
+        // BuildConfig нужен в Kotlin'е для access к versionCode (используется в
+        // persist test cache key — Stage 2). В AGP 8.x по умолчанию выключен.
+        buildConfig = true
     }
 
     compileOptions {

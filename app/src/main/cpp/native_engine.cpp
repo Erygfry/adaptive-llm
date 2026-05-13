@@ -4,6 +4,8 @@
 #include <sstream>
 #include <iomanip>
 #include <cmath>
+#include <cstdio>
+#include <chrono>
 #include <vector>
 #include <unistd.h>
 #include <regex>
@@ -1199,6 +1201,315 @@ extern "C"
         // Этот snapshot теперь не валиден — следующий nativeProcessUserPrompt
         // выставит новый. До тех пор cancelAndCleanKV ничего не сделает (no-op).
         g_pos_before_generation = 0;
+    }
+
+    // =============================================================================
+    // Stage 2: KV state persistence — native primitives + self-test
+    //
+    // Используют llama_state_seq_save_file / _load_file. На большинстве backend'ов
+    // это работает корректно (verified test G1: cosine 1.000000 across 30 cycles
+    // save/restore на CPU). На Vulkan + offload_kqv=true (текущий default) — НЕ
+    // работает (cosine ~0.96, KV частично живёт в GPU buffer'ах которые
+    // state_seq_save_file не сериализует). См. architecture.md § Backend
+    // compatibility, и Phase 5 «Стратегия B».
+    //
+    // Решение — auto-detection через nativeStatePersistTest: декодируем тестовый
+    // prompt, сохраняем state, очищаем KV, загружаем state, декодируем probe-токен
+    // в обоих случаях (после save и после load) и сравниваем cosine логитов.
+    // Если ≥ 0.999 → backend поддерживает persistence (Strategy A). Иначе — нет
+    // (Strategy B, skip file persistence, full re-decode at chat entry).
+    //
+    // Сам тест выполняется ОДИН РАЗ на bootstrap после loadModel и ДО setSystemPrompt
+    // (т.к. модифицирует g_token_history и g_current_pos). Caller (Kotlin) обязан
+    // вызвать setSystemPrompt после теста.
+    // =============================================================================
+
+    // Сохраняет state sequence 0 в файл. g_token_history передаётся как tokens-array
+    // (нужно llama.cpp чтобы при load вернуть тот же набор tokens — используется
+    // для verification).
+    //
+    // Returns: 0 success, 1 model not loaded, 2 save failed (0 bytes written)
+    JNIEXPORT jint JNICALL
+    Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeStateSaveFile(
+        JNIEnv *env, jobject, jstring jPath)
+    {
+        if (!g_model || !g_context) {
+            LOGe("nativeStateSaveFile: model not loaded");
+            return 1;
+        }
+        const char *path = env->GetStringUTFChars(jPath, nullptr);
+        const size_t bytes = llama_state_seq_save_file(
+            g_context, path, /*seq_id=*/0,
+            g_token_history.data(), g_token_history.size());
+        env->ReleaseStringUTFChars(jPath, path);
+
+        if (bytes == 0) {
+            LOGe("nativeStateSaveFile: llama_state_seq_save_file returned 0 (write failed)");
+            return 2;
+        }
+        LOGi("nativeStateSaveFile: wrote %zu bytes, %zu tokens", bytes, g_token_history.size());
+        return 0;
+    }
+
+    // Загружает state sequence 0 из файла. После успешного load:
+    //   - g_token_history заменяется tokens'ами из файла
+    //   - g_current_pos выставляется = n_tokens
+    //   - g_system_pos НЕ обновляется (caller знает структуру и обновит сам, если
+    //     нужно — обычно после load вызывается tail re-decode, и system_pos
+    //     остаётся 0 чтобы proactive_reset re-инжектил весь system prompt)
+    //
+    // Returns: 0 success, 1 model not loaded, 2 load failed
+    JNIEXPORT jint JNICALL
+    Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeStateLoadFile(
+        JNIEnv *env, jobject, jstring jPath)
+    {
+        if (!g_model || !g_context) {
+            LOGe("nativeStateLoadFile: model not loaded");
+            return 1;
+        }
+        const char *path = env->GetStringUTFChars(jPath, nullptr);
+
+        // Capacity = g_n_ctx is upper bound — saved state cannot exceed context.
+        std::vector<llama_token> tokens_buf(g_n_ctx);
+        size_t n_loaded = 0;
+        const size_t bytes = llama_state_seq_load_file(
+            g_context, path, /*dest_seq_id=*/0,
+            tokens_buf.data(), tokens_buf.size(), &n_loaded);
+        env->ReleaseStringUTFChars(jPath, path);
+
+        if (bytes == 0) {
+            LOGe("nativeStateLoadFile: llama_state_seq_load_file returned 0 (read failed or invalid file)");
+            return 2;
+        }
+
+        g_token_history.assign(tokens_buf.begin(), tokens_buf.begin() + n_loaded);
+        g_current_pos = (llama_pos)n_loaded;
+        // Sampler state stale after load — reset (penalty buffer, etc.)
+        if (g_sampler) {
+            common_sampler_reset(g_sampler);
+        }
+        LOGi("nativeStateLoadFile: read %zu bytes, %zu tokens, current_pos=%d",
+             bytes, n_loaded, (int)g_current_pos);
+        return 0;
+    }
+
+    // Self-test для определения Strategy A / B (architecture.md § Backend
+    // compatibility). Однопроходной cycle:
+    //   1. memory_clear (clean start)
+    //   2. Decode test prompt P (~250 tokens, varied text — pangrams)
+    //   3. Save state to tempPath — snapshot KV в state «после P»
+    //   4. Decode probe token X с logits → захватить logits_baseline
+    //   5. memory_clear
+    //   6. Load state from tempPath — restore KV в state «после P»
+    //   7. Decode probe token X с logits → захватить logits_loaded
+    //   8. cosine(logits_baseline, logits_loaded)
+    //
+    // **Single cycle, не multi**: первая попытка с 3 циклами показала что на
+    // Vulkan (Pixel 9) cycle 2 hang'ается в save_file после успешного cycle 1
+    // (вероятно interaction bug между state_seq_load + memory_clear + новый
+    // save). Один cycle стабильно отрабатывает и достаточен — variance gap между
+    // «работает» (~1.0) и «сломано» (~0.96 на старом G7) широкий, single shot
+    // не даст false-positive.
+    //
+    // Длинный prompt (~250 tok разнообразного текста) важен потому что Vulkan
+    // offload issue проявляется на realistic chat state'ах с заполненными
+    // attention layers. Короткий prompt (10 tok) может влезть в один маленький
+    // буфер который сериализуется даже на сломанном code path.
+    //
+    // **Также меряем save_time** — 26-секундный save на Vulkan делает Strategy A
+    // неюзабельной даже при cosine=1.0. Возвращаем cosine; save_time доступен
+    // через лог. Kotlin сторона решает гейтинг.
+    //
+    // Side effects (CRITICAL): wipes KV, modifies g_token_history, resets sampler.
+    // Caller ДОЛЖЕН вызвать setSystemPrompt после теста. Эта функция всегда
+    // возвращает в clean состояние (reset_chat_state в конце).
+    //
+    // Returns: jdoubleArray[3] = {cosine, save_seconds, load_seconds}. Caller
+    // обязан проверять length и null. На ошибке возвращается null или массив
+    // где cosine = NaN.
+    JNIEXPORT jdoubleArray JNICALL
+    Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeStatePersistTest(
+        JNIEnv *env, jobject, jstring jTempPath)
+    {
+        // Helper для возврата error-результата (NaN на cosine, нули на times).
+        auto make_error_result = [&]() -> jdoubleArray {
+            jdoubleArray result = env->NewDoubleArray(3);
+            const jdouble values[3] = { std::nan(""), 0.0, 0.0 };
+            env->SetDoubleArrayRegion(result, 0, 3, values);
+            return result;
+        };
+
+        if (!g_model || !g_context) {
+            LOGe("nativeStatePersistTest: model not loaded");
+            return make_error_result();
+        }
+
+        const char *path = env->GetStringUTFChars(jTempPath, nullptr);
+        std::string tempPath(path);
+        env->ReleaseStringUTFChars(jTempPath, path);
+
+        // Разнообразный pangram-style текст ~250 токенов. Цель — заполнить
+        // attention KV diverse patterns'ами (а не однообразным lorem ipsum
+        // который слишком predictable). Это catches Vulkan offload issue
+        // которое G7 device-тест увидел на realistic chat state'ах.
+        const std::string test_prompt =
+            "The quick brown fox jumps over the lazy dog. "
+            "Pack my box with five dozen liquor jugs. "
+            "How vexingly quick daft zebras jump! "
+            "Sphinx of black quartz, judge my vow. "
+            "Two driven jocks help fax my big quiz. "
+            "Bright vixens jump; dozy fowl quack. "
+            "Quick wafting zephyrs vex bold Jim. "
+            "Waltz, bad nymph, for quick jigs vex. "
+            "Glib jocks quiz nymph to vex dwarf. "
+            "Junk MTV quiz graced by fox whelps. "
+            "Bawds jog, flick quartz, vex nymphs. "
+            "How razorback-jumping frogs can level six piqued gymnasts. "
+            "The job requires extra pluck and zeal from every young wage earner. "
+            "Five quacking zephyrs jolt my wax bed. "
+            "Big fjords vex quick waltz nymph. "
+            "Vexed nymphs go for quick jigs and waltzes. "
+            "Mr. Jock, TV quiz PhD, bags few lynx. "
+            "A quick movement of the enemy will jeopardize six gunboats. "
+            "The five boxing wizards jump quickly across the silent meadow. "
+            "Crazy Fredrick bought many very exquisite opal jewels for his beloved wife.";
+        auto test_tokens = common_tokenize(g_context, test_prompt, /*add_bos=*/true, /*parse_special=*/false);
+        if (test_tokens.empty()) {
+            LOGe("nativeStatePersistTest: tokenize failed");
+            return make_error_result();
+        }
+        const llama_pos n_prompt = (llama_pos)test_tokens.size();
+
+        // Защита от слишком маленького n_ctx: тест prompt + probe + headroom
+        // должны влезть. Если нет — не делаем тест (Strategy B по умолчанию).
+        if (n_prompt + OVERFLOW_HEADROOM + 1 >= g_n_ctx) {
+            LOGw("nativeStatePersistTest: test prompt (%d tok) too large for n_ctx=%d, skipping",
+                 (int)n_prompt, g_n_ctx);
+            return make_error_result();
+        }
+
+        const llama_token probe = test_tokens[0];
+
+        // Lambda для capture logits после decode probe.
+        auto capture_probe_logits = [&](std::vector<float> &out) -> bool {
+            common_batch_clear(g_batch);
+            common_batch_add(g_batch, probe, n_prompt, {0}, /*logits=*/true);
+            if (llama_decode(g_context, g_batch) != 0) return false;
+            const auto *vocab = llama_model_get_vocab(g_model);
+            const int n_vocab = llama_vocab_n_tokens(vocab);
+            const float *logits = llama_get_logits_ith(g_context, -1);
+            if (!logits) return false;
+            out.assign(logits, logits + n_vocab);
+            return true;
+        };
+
+        auto cosine_of = [](const std::vector<float> &a, const std::vector<float> &b) -> double {
+            if (a.size() != b.size()) return std::nan("");
+            double dot = 0.0, na = 0.0, nb = 0.0;
+            for (size_t i = 0; i < a.size(); i++) {
+                const double x = a[i], y = b[i];
+                dot += x * y;
+                na += x * x;
+                nb += y * y;
+            }
+            const double denom = std::sqrt(na) * std::sqrt(nb);
+            return (denom > 0.0) ? (dot / denom) : 0.0;
+        };
+
+        const auto *vocab = llama_model_get_vocab(g_model);
+        const int n_vocab = llama_vocab_n_tokens(vocab);
+
+        // 1. Fresh decode P
+        LOGi("PersistTest [1] memory_clear");
+        llama_memory_clear(llama_get_memory(g_context), false);
+        g_current_pos = 0;
+        g_token_history.clear();
+        LOGi("PersistTest [2] decode P (%d tok)", (int)n_prompt);
+        if (decode_in_batches(test_tokens, 0) != 0) {
+            LOGe("PersistTest: decode P failed");
+            reset_chat_state(true);
+            std::remove(tempPath.c_str());
+            return make_error_result();
+        }
+        g_current_pos = n_prompt;
+        g_token_history.assign(test_tokens.begin(), test_tokens.end());
+
+        // 2. Save state — измеряем время для save-perf gating
+        LOGi("PersistTest [3] save_file");
+        const auto save_t0 = std::chrono::steady_clock::now();
+        const size_t save_bytes = llama_state_seq_save_file(
+            g_context, tempPath.c_str(), 0,
+            g_token_history.data(), g_token_history.size());
+        const auto save_t1 = std::chrono::steady_clock::now();
+        const double save_seconds = std::chrono::duration<double>(save_t1 - save_t0).count();
+        if (save_bytes == 0) {
+            LOGe("PersistTest: save_file returned 0");
+            reset_chat_state(true);
+            std::remove(tempPath.c_str());
+            return make_error_result();
+        }
+        LOGi("PersistTest [3] saved %zu bytes in %.2f sec", save_bytes, save_seconds);
+
+        // 3. Baseline probe
+        LOGi("PersistTest [4] baseline probe decode");
+        std::vector<float> logits_baseline;
+        if (!capture_probe_logits(logits_baseline)) {
+            LOGe("PersistTest: baseline probe failed");
+            reset_chat_state(true);
+            std::remove(tempPath.c_str());
+            return make_error_result();
+        }
+
+        // 4. Clear and load — измеряем load_time
+        LOGi("PersistTest [5] memory_clear");
+        llama_memory_clear(llama_get_memory(g_context), false);
+        g_current_pos = 0;
+        g_token_history.clear();
+        LOGi("PersistTest [6] load_file");
+        std::vector<llama_token> tokens_buf(g_n_ctx);
+        size_t n_loaded = 0;
+        const auto load_t0 = std::chrono::steady_clock::now();
+        const size_t load_bytes = llama_state_seq_load_file(
+            g_context, tempPath.c_str(), 0,
+            tokens_buf.data(), tokens_buf.size(), &n_loaded);
+        const auto load_t1 = std::chrono::steady_clock::now();
+        const double load_seconds = std::chrono::duration<double>(load_t1 - load_t0).count();
+        if (load_bytes == 0 || (llama_pos)n_loaded != n_prompt) {
+            LOGe("PersistTest: load_file failed (bytes=%zu, n_loaded=%zu, expected=%d)",
+                 load_bytes, n_loaded, (int)n_prompt);
+            reset_chat_state(true);
+            std::remove(tempPath.c_str());
+            return make_error_result();
+        }
+        LOGi("PersistTest [6] loaded %zu bytes, n_loaded=%zu, in %.2f sec",
+             load_bytes, n_loaded, load_seconds);
+        g_current_pos = (llama_pos)n_loaded;
+        g_token_history.assign(tokens_buf.begin(), tokens_buf.begin() + n_loaded);
+
+        // 5. Loaded probe
+        LOGi("PersistTest [7] post-load probe decode");
+        std::vector<float> logits_loaded;
+        if (!capture_probe_logits(logits_loaded)) {
+            LOGe("PersistTest: post-load probe failed");
+            reset_chat_state(true);
+            std::remove(tempPath.c_str());
+            return make_error_result();
+        }
+
+        // 6. Cosine
+        const double cosine = cosine_of(logits_baseline, logits_loaded);
+        LOGi("PersistTest result: cosine=%.6f, save_time=%.2f sec, load_time=%.2f sec, "
+             "size=%zu bytes (n_prompt=%d, n_vocab=%d)",
+             cosine, save_seconds, load_seconds, save_bytes, (int)n_prompt, n_vocab);
+
+        // Cleanup
+        reset_chat_state(true);
+        std::remove(tempPath.c_str());
+
+        jdoubleArray result = env->NewDoubleArray(3);
+        const jdouble values[3] = { cosine, save_seconds, load_seconds };
+        env->SetDoubleArrayRegion(result, 0, 3, values);
+        return result;
     }
 
 } // extern "C"

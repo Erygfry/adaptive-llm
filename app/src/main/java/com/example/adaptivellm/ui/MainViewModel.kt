@@ -7,8 +7,10 @@ import com.example.adaptivellm.analytics.AnalyticsLogger
 import com.example.adaptivellm.device.DeviceDetector
 import com.example.adaptivellm.device.DeviceProfile
 import com.example.adaptivellm.device.RamTier
+import com.example.adaptivellm.BuildConfig
 import com.example.adaptivellm.inference.InferenceEngine
 import com.example.adaptivellm.inference.InferenceEngineImpl
+import com.example.adaptivellm.inference.PersistTestCache
 import com.example.adaptivellm.model.DownloadService
 import com.example.adaptivellm.model.DownloadState
 import com.example.adaptivellm.model.ModelCatalog
@@ -62,6 +64,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
          * Пользователь видит счётчик X/10 в TopAppBar и кнопку "+" disabled при 10/10.
          */
         const val MAX_CHATS = 10
+
+        /**
+         * Имя файла под temp persist test (Stage 2). Stored в filesDir, удаляется
+         * нативным кодом после теста.
+         */
+        private const val PERSIST_TEST_FILE = "state_persist_test.bin"
+
+        /**
+         * Параметры polling'а в [ensureModelLoaded]. На A80 raw prefill ~6 t/s,
+         * а persist test декодит 238 токенов (~40 сек). Плюс модель load (~10 сек)
+         * + setSystemPrompt (~5 сек) + overhead. Worst case = ~60 сек. Берём
+         * запас 3× = 180 сек чтобы покрыть и более медленные устройства / диски.
+         * Polling exit'ит мгновенно при ModelLoaded — overhead только когда
+         * реально что-то медленное идёт.
+         */
+        private const val LOAD_POLL_ITERATIONS = 1800
+        private const val LOAD_POLL_TICK_MS = 100L
+    }
+
+    /** Абсолютный путь к temp файлу persist test'а (Stage 2). */
+    private val persistTestPath: String
+        get() = File(getApplication<Application>().filesDir, PERSIST_TEST_FILE).absolutePath
+
+    /**
+     * SharedPreferences-кэш для результата persist test'а. Ключ включает модель
+     * (имя файла + размер) + APK versionCode (proxy для llama.cpp build hash).
+     * Backend добавляется при get/put чтобы один и тот же чат на разных
+     * backend'ах кэшировался отдельно (Vulkan toggle / CPU fallback).
+     */
+    private fun persistTestCacheFor(model: ModelVariant): PersistTestCache {
+        val prefs = getApplication<Application>()
+            .getSharedPreferences("persist_test_cache", Context.MODE_PRIVATE)
+        // model.fileName + model.fileSizeMb + appVersionCode = (модель, build) identity.
+        // При обновлении APK versionCode меняется → все cache keys инвалидируются.
+        val modelKey = "${model.fileName}_${model.fileSizeMb}MB_v${BuildConfig.VERSION_CODE}"
+        return object : PersistTestCache {
+            override fun get(backend: String): Boolean? =
+                prefs.getString("${modelKey}_${backend}", null)?.toBooleanStrictOrNull()
+            override fun put(backend: String, value: Boolean) {
+                prefs.edit().putString("${modelKey}_${backend}", value.toString()).apply()
+            }
+        }
+    }
+
+    /** Variant для cache key'а в loadModelFromPath (нет ModelVariant, берём файл). */
+    private fun persistTestCacheForFile(path: String): PersistTestCache {
+        val file = File(path)
+        val sizeMb = (file.length() / (1024 * 1024)).toInt()
+        val prefs = getApplication<Application>()
+            .getSharedPreferences("persist_test_cache", Context.MODE_PRIVATE)
+        val modelKey = "${file.name}_${sizeMb}MB_v${BuildConfig.VERSION_CODE}"
+        return object : PersistTestCache {
+            override fun get(backend: String): Boolean? =
+                prefs.getString("${modelKey}_${backend}", null)?.toBooleanStrictOrNull()
+            override fun put(backend: String, value: Boolean) {
+                prefs.edit().putString("${modelKey}_${backend}", value.toString()).apply()
+            }
+        }
     }
 
     val engine: InferenceEngine = InferenceEngineImpl.getInstance(application)
@@ -242,6 +302,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     nGpuLayers = nGpuLayers,
                     nCtx = contextSizeFor(deviceProfile.ramTier),
                     prompt = SYSTEM_PROMPT,
+                    persistTestPath = persistTestPath,
+                    persistTestCache = persistTestCacheForFile(path),
                 )
                 _backendInfo.value = engine.getBackendName()
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -354,8 +416,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             engine.state.value is InferenceEngine.State.Processing) {
             // Простой polling — в текущей архитектуре loadModel не возвращает Job который
             // можно join'ить, проще подождать state change.
-            for (i in 0 until 600) { // максимум 60 секунд при 100ms tick
-                kotlinx.coroutines.delay(100)
+            for (i in 0 until LOAD_POLL_ITERATIONS) {
+                kotlinx.coroutines.delay(LOAD_POLL_TICK_MS)
                 if (engine.state.value is InferenceEngine.State.ModelLoaded) return true
                 if (engine.state.value is InferenceEngine.State.Error) return false
                 if (engine.state.value is InferenceEngine.State.Ready) break // загрузка отменена
@@ -370,8 +432,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             loadModel(variant)
         }
         // Ждём результат
-        for (i in 0 until 600) {
-            kotlinx.coroutines.delay(100)
+        for (i in 0 until LOAD_POLL_ITERATIONS) {
+            kotlinx.coroutines.delay(LOAD_POLL_TICK_MS)
             val state = engine.state.value
             if (state is InferenceEngine.State.ModelLoaded) return true
             if (state is InferenceEngine.State.Error) return false
@@ -395,6 +457,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 nGpuLayers = if (useVulkan) -1 else 0,
                 nCtx = contextSizeFor(deviceProfile.ramTier),
                 prompt = SYSTEM_PROMPT,
+                persistTestPath = persistTestPath,
+                persistTestCache = persistTestCacheFor(variant),
             )
             if (useVulkan) {
                 val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
