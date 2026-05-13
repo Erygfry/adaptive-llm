@@ -13,6 +13,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.adaptivellm.ui.AppScreen
+import com.example.adaptivellm.ui.ChatListScreen
 import com.example.adaptivellm.ui.ChatScreen
 import com.example.adaptivellm.ui.DownloadScreen
 import com.example.adaptivellm.ui.MainViewModel
@@ -33,6 +34,7 @@ class MainActivity : ComponentActivity() {
                 when (screen) {
                     is AppScreen.Setup -> SetupScreen(viewModel)
                     is AppScreen.Download -> DownloadScreen(viewModel)
+                    is AppScreen.ChatList -> ChatListScreen(viewModel)
                     is AppScreen.Chat -> ChatScreen(viewModel)
                 }
             }

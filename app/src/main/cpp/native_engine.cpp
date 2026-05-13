@@ -305,6 +305,25 @@ static std::string chat_add_and_format(const std::string &role, const std::strin
     return common_chat_templates_apply(g_chat_templates.get(), inputs).prompt;
 }
 
+// Format a HISTORICAL message (for replay при chat switch) — без generation prompt
+// в конце. Используется при загрузке существующего чата чтобы восстановить контекст
+// в KV cache. Отличается от chat_add_and_format:
+//   - всегда legacy template (без Jinja и thinking-mode injection'ов): мы replay'им
+//     уже сгенерированные turn'ы, никакой thinking control не нужен
+//   - add_ass=false: следующий turn будет добавлен явно, не через generation
+//
+// Assistant-сообщения хранятся в БД как clean text (thinking strip'ается на UI слое
+// перед сохранением — см. MainViewModel parser). Template Qwen3.5 в любом случае
+// auto-strips <think>...</think> из исторических assistant turn'ов.
+static std::string chat_format_for_history(const std::string &role, const std::string &content)
+{
+    common_chat_msg msg;
+    msg.role = role;
+    msg.content = content;
+    return common_chat_format_single(
+        g_chat_templates.get(), {}, msg, false, false);
+}
+
 static int decode_in_batches(const llama_tokens &tokens, llama_pos start, bool logit_last = false)
 {
     for (int i = 0; i < (int)tokens.size(); i += BATCH_SIZE)
@@ -569,6 +588,18 @@ extern "C"
     Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeSetSystemPrompt(
         JNIEnv *env, jobject, jstring jPrompt)
     {
+        // Защита от race condition'а: пользователь может быстро навигировать
+        // (back-back-back) и triggernуть unloadModel ПОКА Kotlin сторона уже
+        // запланировала setSystemPrompt на llamaDispatcher. После unload'а
+        // g_model/g_context/g_chat_templates становятся null/reset, и
+        // common_chat_templates_was_explicit крашится с SIGSEGV. Возвращаем
+        // error code, Kotlin интерпретирует как load failure и graceful'но
+        // откатывает UI state.
+        if (!g_model || !g_context || !g_chat_templates) {
+            LOGe("nativeSetSystemPrompt: model not loaded (race with unload?)");
+            return 1;
+        }
+
         reset_chat_state();
 
         const char *raw = env->GetStringUTFChars(jPrompt, nullptr);
@@ -617,6 +648,12 @@ extern "C"
     Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeProcessUserPrompt(
         JNIEnv *env, jobject, jstring jPrompt, jint nPredict)
     {
+        // Аналогично nativeSetSystemPrompt — guard от race c unloadModel.
+        if (!g_model || !g_context || !g_chat_templates) {
+            LOGe("nativeProcessUserPrompt: model not loaded (race with unload?)");
+            return 1;
+        }
+
         g_cached_chars.clear();
         g_spec_buffer.clear();
         g_spec_buffer_pos = 0;
@@ -988,6 +1025,78 @@ extern "C"
     {
         g_cancel_load = true;
         LOGi("nativeCancelLoading: flag set, current load (if any) will abort");
+    }
+
+    // =============================================================================
+    // nativeAddMessageToHistory — декодирует существующее сообщение в KV cache
+    // БЕЗ запуска generation. Используется при chat switching (Stage 1) для replay
+    // истории чата: после setSystemPrompt пробегаем все исторические messages
+    // в порядке (user, assistant, user, assistant, ...) и декодируем каждое.
+    //
+    // Params:
+    //   role     — "user" или "assistant". Влияет на template formatting.
+    //   text     — content сообщения. Для assistant — clean text без <think>.
+    //
+    // Returns:
+    //   0     — успех
+    //  -1     — модель не загружена
+    //  -2     — нет места в context (history превышает g_n_ctx)
+    //  -3     — decode failed
+    //
+    // Side effects:
+    //   - g_current_pos продвигается на n tokens
+    //   - g_token_history расширяется decoded токенами
+    //   - g_pos_before_generation / g_stop_pos НЕ трогаются (это для текущего turn'а)
+    // =============================================================================
+    JNIEXPORT jint JNICALL
+    Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeAddMessageToHistory(
+        JNIEnv *env, jobject, jstring jRole, jstring jText)
+    {
+        if (!g_model || !g_context) {
+            LOGe("AddMessageToHistory: model not loaded");
+            return -1;
+        }
+
+        const char *rawRole = env->GetStringUTFChars(jRole, nullptr);
+        const char *rawText = env->GetStringUTFChars(jText, nullptr);
+        std::string role(rawRole ? rawRole : "");
+        std::string text(rawText ? rawText : "");
+        env->ReleaseStringUTFChars(jRole, rawRole);
+        env->ReleaseStringUTFChars(jText, rawText);
+
+        if (role.empty() || (role != "user" && role != "assistant")) {
+            LOGe("AddMessageToHistory: invalid role '%s' (must be 'user' or 'assistant')",
+                 role.c_str());
+            return -1;
+        }
+        if (text.empty()) {
+            // Empty content всё ещё валиден (например модель ответила пустотой),
+            // но не имеет смысла что-то декодировать. No-op.
+            return 0;
+        }
+
+        bool has_tmpl = common_chat_templates_was_explicit(g_chat_templates.get());
+        std::string formatted = has_tmpl ? chat_format_for_history(role, text) : text;
+        auto tokens = common_tokenize(g_context, formatted, false, false);
+        int n = (int)tokens.size();
+
+        if (g_current_pos + n >= g_n_ctx - OVERFLOW_HEADROOM) {
+            LOGw("AddMessageToHistory: insufficient context space "
+                 "(current=%d + %d >= %d - %d) — replay would overflow",
+                 (int)g_current_pos, n, g_n_ctx, OVERFLOW_HEADROOM);
+            return -2;
+        }
+
+        if (decode_in_batches(tokens, g_current_pos) != 0) {
+            LOGe("AddMessageToHistory: decode failed for role=%s, len=%d", role.c_str(), n);
+            return -3;
+        }
+
+        g_current_pos += n;
+        g_token_history.insert(g_token_history.end(), tokens.begin(), tokens.end());
+        LOGi("AddMessageToHistory: role=%s, %d tokens decoded, current_pos=%d",
+             role.c_str(), n, (int)g_current_pos);
+        return 0;
     }
 
     // =============================================================================

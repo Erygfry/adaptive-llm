@@ -68,6 +68,7 @@ import com.example.adaptivellm.inference.InferenceEngine
 fun ChatScreen(viewModel: MainViewModel) {
     val messages by viewModel.messages.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
+    val isSwitchingChat by viewModel.isSwitchingChat.collectAsState()
     val tps by viewModel.tokensPerSecond.collectAsState()
     val backend by viewModel.backendInfo.collectAsState()
     val engineState by viewModel.engine.state.collectAsState()
@@ -148,12 +149,12 @@ fun ChatScreen(viewModel: MainViewModel) {
             TopAppBar(
                 navigationIcon = {
                     IconButton(
-                        onClick = { viewModel.goBackToSetup() },
+                        onClick = { viewModel.backToChatList() },
                         enabled = !isGenerating,
                     ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back to setup",
+                            contentDescription = "Назад к списку чатов",
                         )
                     }
                 },
@@ -164,11 +165,12 @@ fun ChatScreen(viewModel: MainViewModel) {
                             style = MaterialTheme.typography.titleMedium,
                         )
                         val tokenInfo = if (totalTokens > 0) " | $totalTokens/${viewModel.nCtx}" else ""
-                        val statusText = when (engineState) {
-                            is InferenceEngine.State.LoadingModel -> "Loading model..."
-                            is InferenceEngine.State.Generating -> "%.1f t/s | %s%s".format(tps, backend, tokenInfo)
-                            is InferenceEngine.State.ModelLoaded -> "Ready | %s%s".format(backend, tokenInfo)
-                            is InferenceEngine.State.Error -> "Error"
+                        val statusText = when {
+                            isSwitchingChat -> "Загрузка чата..."
+                            engineState is InferenceEngine.State.LoadingModel -> "Loading model..."
+                            engineState is InferenceEngine.State.Generating -> "%.1f t/s | %s%s".format(tps, backend, tokenInfo)
+                            engineState is InferenceEngine.State.ModelLoaded -> "Ready | %s%s".format(backend, tokenInfo)
+                            engineState is InferenceEngine.State.Error -> "Error"
                             else -> "Initializing..."
                         }
                         Text(
@@ -221,7 +223,7 @@ fun ChatScreen(viewModel: MainViewModel) {
                     onValueChange = { inputText = it },
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("Type a message...") },
-                    enabled = engineState is InferenceEngine.State.ModelLoaded && !isGenerating,
+                    enabled = engineState is InferenceEngine.State.ModelLoaded && !isGenerating && !isSwitchingChat,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(
                         onSend = {
@@ -309,7 +311,8 @@ fun ChatScreen(viewModel: MainViewModel) {
                             }
                         },
                         enabled = inputText.isNotBlank() &&
-                                engineState is InferenceEngine.State.ModelLoaded,
+                                engineState is InferenceEngine.State.ModelLoaded &&
+                                !isSwitchingChat,
                     ) {
                         Icon(
                             Icons.Default.Send,

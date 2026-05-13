@@ -51,6 +51,7 @@ class InferenceEngineImpl private constructor(
     private external fun nativeWasThinkingDisabled(): Boolean
     private external fun nativeCancelAndCleanKV()
     private external fun nativeCancelLoading()
+    private external fun nativeAddMessageToHistory(role: String, text: String): Int
 
 
 
@@ -153,6 +154,11 @@ class InferenceEngineImpl private constructor(
     override fun cancelLoading() {
         nativeCancelLoading()
     }
+
+    override suspend fun addMessageToHistory(role: String, text: String): Int =
+        withContext(llamaDispatcher) {
+            nativeAddMessageToHistory(role, text)
+        }
 
     override fun sendMessage(message: String, maxTokens: Int): Flow<String> = flow {
         check(_state.value is InferenceEngine.State.ModelLoaded) {

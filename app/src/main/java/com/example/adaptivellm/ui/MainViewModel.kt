@@ -15,6 +15,7 @@ import com.example.adaptivellm.model.ModelCatalog
 import com.example.adaptivellm.model.ModelDownloader
 import com.example.adaptivellm.model.ModelSelector
 import com.example.adaptivellm.model.ModelVariant
+import com.example.adaptivellm.storage.ChatRepository
 import com.example.adaptivellm.storage.MemoryDatabaseHelper
 import com.example.adaptivellm.update.ApkInstaller
 import android.content.Context
@@ -35,6 +36,7 @@ data class ChatMessage(
 sealed class AppScreen {
     data object Setup : AppScreen()
     data object Download : AppScreen()
+    data object ChatList : AppScreen()
     data object Chat : AppScreen()
 }
 
@@ -51,6 +53,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_VULKAN_CRASHED = "vulkan_crashed"
         // Minimum RAM to attempt Vulkan (model + KV cache + system overhead)
         private const val MIN_RAM_FOR_VULKAN_MB = 8_000L
+
+        /**
+         * Максимум одновременных чатов. Лимит готовит почву под Stage 4+
+         * KV cache persistence — каждый чат будет хранить kv_cache.bin размером
+         * ~100-200 MB (см. ChatRepository / architecture.md). При >10 чатах
+         * disk usage пробивает разумные 1-2 GB, особенно на mid-range устройствах.
+         * Пользователь видит счётчик X/10 в TopAppBar и кнопку "+" disabled при 10/10.
+         */
+        const val MAX_CHATS = 10
     }
 
     val engine: InferenceEngine = InferenceEngineImpl.getInstance(application)
@@ -93,6 +104,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
+    /**
+     * Флаг "пользователь нажал stop". Ставится в stopGeneration / backToChatList /
+     * goBackToSetup, сбрасывается в начале каждого sendMessage. Используется в
+     * post-generation блоке чтобы отличить "cancel during thinking → пустой ответ"
+     * от "model wanted to reply that way" — в первом случае подставляется
+     * placeholder вместо пустого bubble'а.
+     */
+    @Volatile
+    private var cancelRequested = false
+
     private val _thinkingMode = MutableStateFlow(0)
     val thinkingMode: StateFlow<Int> = _thinkingMode.asStateFlow()
 
@@ -109,6 +130,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _loadedModelName = MutableStateFlow("")
     val loadedModelName: StateFlow<String> = _loadedModelName.asStateFlow()
 
+    /**
+     * Путь к локально-pushed .gguf файлу (через adb, для dev/testing). Если задан —
+     * приоритетнее чем downloaded variants при ensureModelLoaded.
+     */
+    private var _localGgufPath: String? = null
+
+    // Chat list (Stage 1 — multi-chat). Текущий выбранный чат через _currentChatId;
+    // когда null — пользователь на ChatList screen'е. _messages выше отражает
+    // сообщения именно текущего чата.
+    private val _chats = MutableStateFlow<List<ChatRepository.ChatInfo>>(emptyList())
+    val chats: StateFlow<List<ChatRepository.ChatInfo>> = _chats.asStateFlow()
+
+    private val _currentChatId = MutableStateFlow<Long?>(null)
+    val currentChatId: StateFlow<Long?> = _currentChatId.asStateFlow()
+
+    /**
+     * Когда true — идёт переключение чата (replay истории в engine). Блокирует
+     * UI ввод чтобы пользователь не нажал send пока KV не готов.
+     */
+    private val _isSwitchingChat = MutableStateFlow(false)
+    val isSwitchingChat: StateFlow<Boolean> = _isSwitchingChat.asStateFlow()
+
+    /**
+     * Job текущего [selectChatInternal] — нужен чтобы пользователь мог прервать
+     * долгий replay через back-button (см. [backToChatList]). Кооперативная
+     * отмена: cancel поднимает CancellationException на ближайшем suspend point
+     * (между addMessageToHistory'ами или внутри ensureModelLoaded's delay loop).
+     * Native call в процессе выполнения дожмётся до конца (≤1 сек обычно).
+     */
+    private var chatSwitchJob: kotlinx.coroutines.Job? = null
+
     // Update
     private val _availableUpdate = MutableStateFlow<ReleaseInfo?>(null)
     val availableUpdate: StateFlow<ReleaseInfo?> = _availableUpdate.asStateFlow()
@@ -119,12 +171,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         // Initialize memory database (Stage 0 — schema + sqlite-vec ready). Запускается
-        // независимо от chat flow — БД нужна для retrieval (Phase 1) и persistence
-        // (Phase 5), но не блокирует loading модели. Если упадёт — log + ничего не
-        // делаем; chat продолжит работать без памяти (degraded mode).
+        // независимо от chat flow. Если упадёт — log + ничего не делаем; chat
+        // продолжит работать без памяти (degraded mode).
+        // После успешной init загружаем список чатов в _chats.
         viewModelScope.launch {
             try {
                 MemoryDatabaseHelper.initialize(application)
+                refreshChats()
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "MemoryDatabase init failed — memory features disabled", e)
             }
@@ -140,15 +193,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .firstOrNull()
 
         if (downloadedVariant != null) {
-            _screen.value = AppScreen.Chat
+            // Stage 1: после init идём на ChatList БЕЗ загрузки модели — пользователь
+            // может зайти просто чтобы удалить старые чаты или посмотреть список.
+            // Модель загружается lazy при первом входе в чат (см. ensureModelLoaded).
+            _screen.value = AppScreen.ChatList
             _selectedModel.value = downloadedVariant
-            loadModel(downloadedVariant)
         } else {
             // Fallback: check for any .gguf pushed manually via adb (dev/testing only)
             val localGguf = findLocalGguf(application)
             if (localGguf != null) {
-                _screen.value = AppScreen.Chat
-                loadModelFromPath(localGguf)
+                _screen.value = AppScreen.ChatList
+                _localGgufPath = localGguf
             }
         }
 
@@ -209,8 +264,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startDownload() {
         val model = _selectedModel.value
         if (downloader.isDownloaded(model)) {
-            _screen.value = AppScreen.Chat
-            loadModel(model)
+            // Stage 1: после выбора модели идём на ChatList (а не сразу в Chat).
+            // Модель НЕ грузится здесь — lazy load при первом входе в чат.
+            _screen.value = AppScreen.ChatList
             return
         }
 
@@ -227,8 +283,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _downloadState.value = state
                 if (state is DownloadState.Complete) {
                     refreshDownloadedModels()
-                    _screen.value = AppScreen.Chat
-                    loadModel(model)
+                    // После завершения download → ChatList (не Chat). Загрузка модели
+                    // отложена до первого реального входа в чат.
+                    _screen.value = AppScreen.ChatList
                 }
             }
         }
@@ -274,6 +331,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 tryLoadModel(path, variant, useVulkan = false)
             }
         }
+    }
+
+    /**
+     * Гарантирует что модель загружена в engine. Если уже загружена — мгновенно
+     * возвращает. Иначе запускает загрузку. Используется как prerequisite перед
+     * операциями требующими engine (selectChat / createNewChat / sendMessage).
+     *
+     * Stage 1: lazy load — модель не грузится при init'е если пользователь сразу
+     * заходит на ChatList (например для удаления чатов). Загружается только при
+     * первом реальном входе в чат.
+     *
+     * Возвращает true если модель готова, false если попытка загрузки провалилась.
+     */
+    private suspend fun ensureModelLoaded(): Boolean {
+        // Если уже loaded — мгновенно возвращаем
+        if (engine.state.value is InferenceEngine.State.ModelLoaded) {
+            return true
+        }
+        // Если уже идёт загрузка — ждём её завершения
+        if (engine.state.value is InferenceEngine.State.LoadingModel ||
+            engine.state.value is InferenceEngine.State.Processing) {
+            // Простой polling — в текущей архитектуре loadModel не возвращает Job который
+            // можно join'ить, проще подождать state change.
+            for (i in 0 until 600) { // максимум 60 секунд при 100ms tick
+                kotlinx.coroutines.delay(100)
+                if (engine.state.value is InferenceEngine.State.ModelLoaded) return true
+                if (engine.state.value is InferenceEngine.State.Error) return false
+                if (engine.state.value is InferenceEngine.State.Ready) break // загрузка отменена
+            }
+        }
+        // Триггерим загрузку
+        val localPath = _localGgufPath
+        if (localPath != null) {
+            loadModelFromPath(localPath)
+        } else {
+            val variant = _selectedModel.value
+            loadModel(variant)
+        }
+        // Ждём результат
+        for (i in 0 until 600) {
+            kotlinx.coroutines.delay(100)
+            val state = engine.state.value
+            if (state is InferenceEngine.State.ModelLoaded) return true
+            if (state is InferenceEngine.State.Error) return false
+        }
+        return false
     }
 
     private suspend fun tryLoadModel(path: String, variant: ModelVariant, useVulkan: Boolean): Boolean {
@@ -332,12 +435,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendMessage(text: String) {
-        if (text.isBlank() || _isGenerating.value) return
+        val chatId = _currentChatId.value
+        if (chatId == null) {
+            android.util.Log.w("MainViewModel", "sendMessage: no current chat — ignoring")
+            return
+        }
+        if (text.isBlank() || _isGenerating.value || _isSwitchingChat.value) return
 
         _messages.value = _messages.value + ChatMessage(text, isUser = true)
         _isGenerating.value = true
+        cancelRequested = false
 
         viewModelScope.launch {
+            // Persist user message в БД сразу (до начала generation). Это значит
+            // что даже если пользователь cancel'нёт mid-generation — его reply
+            // сохранён (он видит его в UI, и в DB совпадает). Assistant сохраняется
+            // только после успешного завершения generation.
+            val isFirstMessage = _messages.value.count { it.isUser } == 1
+            try {
+                val userMsgId = ChatRepository.addMessage(chatId, "user", text)
+                android.util.Log.i("MainViewModel",
+                    "Persisted user message: chatId=$chatId, msgId=$userMsgId, len=${text.length}, " +
+                    "isFirstMsg=$isFirstMessage")
+                // Если это первое user сообщение в чате — сделаем auto-title из него
+                if (isFirstMessage) {
+                    val title = text.take(50).trim().ifBlank { "Чат" }
+                    ChatRepository.updateTitle(chatId, title)
+                    refreshChats()
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("MainViewModel", "Failed to persist user message", e)
+                // Продолжаем — user message в памяти, generation работает; degraded mode.
+            }
+
             val responseBuilder = StringBuilder()
             var tokenCount = 0
             val startTime = System.currentTimeMillis()
@@ -349,6 +479,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Check if thinking was auto-disabled due to low context
             val thinkingActive = _thinkingMode.value == 1 && !engine.wasThinkingDisabled()
 
+            var finalDisplayText = ""
             engine.sendMessage(text).collect { token ->
                 responseBuilder.append(token)
                 tokenCount++
@@ -383,6 +514,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     thinkContent = ""
                     displayText = raw.trim()
                 }
+                finalDisplayText = displayText
 
                 val updated = _messages.value.toMutableList()
                 updated[updated.lastIndex] = ChatMessage(
@@ -395,6 +527,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             _isGenerating.value = false
             _totalTokens.value = engine.getCurrentPos()
+
+            // Cancel-during-thinking placeholder: если пользователь нажал stop, и
+            // финальный visible-текст пустой (модель сгенерировала только thinking
+            // без любого внешнего ответа), показываем заглушку в UI и сохраняем её
+            // как assistant message. Иначе пользователь увидит пустой bubble после
+            // re-open чата — confusing.
+            if (cancelRequested && finalDisplayText.isBlank()) {
+                finalDisplayText = "(сообщение отменено)"
+                val updated = _messages.value.toMutableList()
+                if (updated.isNotEmpty() && !updated.last().isUser) {
+                    updated[updated.lastIndex] = ChatMessage(
+                        text = finalDisplayText,
+                        isUser = false,
+                        thinkingText = updated.last().thinkingText,
+                    )
+                    _messages.value = updated
+                }
+            }
+
+            // Persist assistant message (только clean text без <think>). На cancel
+            // вытяжка finalDisplayText до точки прерывания, на успех — полный ответ.
+            // Если ничего не сгенерилось и cancel не был запрошен (т.е. модель просто
+            // выдала пустой ответ) — не сохраняем (пустые ответы бесполезны).
+            if (finalDisplayText.isNotBlank()) {
+                try {
+                    val assistantMsgId = ChatRepository.addMessage(chatId, "assistant", finalDisplayText)
+                    android.util.Log.i("MainViewModel",
+                        "Persisted assistant message: chatId=$chatId, msgId=$assistantMsgId, " +
+                        "len=${finalDisplayText.length}, tokens=$tokenCount, cancelled=$cancelRequested")
+                } catch (e: Exception) {
+                    android.util.Log.w("MainViewModel", "Failed to persist assistant message", e)
+                }
+            } else {
+                android.util.Log.i("MainViewModel",
+                    "Assistant message NOT persisted (blank finalDisplayText, cancelRequested=$cancelRequested)")
+            }
+            refreshChats() // обновляет last_active_at в UI
 
             // Restore thinking mode if it was auto-disabled due to low context
             if (engine.wasThinkingDisabled()) {
@@ -428,10 +597,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             //     почти сразу (вместо 5-10 сек ожидания полной загрузки модели).
             //   - Если идёт generation → cancelGeneration флаг видит loop в sendMessage
             //     flow → выход + cancelAndCleanKV → unloadModel запускается дальше.
+            cancelRequested = true
             engine.cancelLoading()        // flag для model load
             engine.stopGeneration()       // flag для generation
+            chatSwitchJob?.cancel()       // прерываем chat switch если идёт
+            chatSwitchJob = null
             engine.unloadModel()          // ждёт завершения текущей операции на llamaDispatcher
             _messages.value = emptyList()
+            _currentChatId.value = null
             _tokensPerSecond.value = 0f
             _totalTokens.value = 0
             _backendInfo.value = ""
@@ -439,6 +612,161 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             refreshDownloadedModels()
             _screen.value = AppScreen.Setup
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Chat management (Stage 1)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Обновляет список чатов из БД. Вызывается после mutations и при init. */
+    private suspend fun refreshChats() {
+        try {
+            _chats.value = ChatRepository.getChats()
+        } catch (e: Exception) {
+            android.util.Log.w("MainViewModel", "refreshChats failed", e)
+            _chats.value = emptyList()
+        }
+    }
+
+    /**
+     * Создаёт новый чат и сразу открывает его. После init engine'а title NULL —
+     * заполнится в [sendMessage] при первом user message.
+     */
+    fun createNewChat() {
+        if (_chats.value.size >= MAX_CHATS) {
+            android.util.Log.w("MainViewModel",
+                "createNewChat ignored — already at MAX_CHATS=$MAX_CHATS limit")
+            return
+        }
+        chatSwitchJob?.cancel()
+        chatSwitchJob = viewModelScope.launch {
+            try {
+                val chatId = ChatRepository.createChat(title = null)
+                refreshChats()
+                selectChatInternal(chatId, isNew = true)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "createNewChat failed", e)
+            }
+        }
+    }
+
+    /**
+     * Открывает существующий чат: загружает messages из БД, replay'ит их в KV.
+     * Стоимость replay'а = prefill всех сообщений чата (1-10 сек в зависимости
+     * от истории и backend'а).
+     */
+    fun selectChat(chatId: Long) {
+        chatSwitchJob?.cancel()
+        chatSwitchJob = viewModelScope.launch {
+            selectChatInternal(chatId, isNew = false)
+        }
+    }
+
+    private suspend fun selectChatInternal(chatId: Long, isNew: Boolean) {
+        _isSwitchingChat.value = true
+        // Транзиционно показываем Chat screen с пустыми сообщениями (или старыми)
+        // — пользователь сразу видит «Загрузка чата...» вместо застрявшего ChatList'а.
+        _screen.value = AppScreen.Chat
+        try {
+            // Lazy load: грузим модель только при первом реальном входе в чат
+            // (а не при init'е ChatList). Если model уже loaded — это no-op.
+            val modelReady = ensureModelLoaded()
+            if (!modelReady) {
+                android.util.Log.e("MainViewModel", "selectChat: model load failed/cancelled")
+                _screen.value = AppScreen.ChatList
+                return
+            }
+
+            // Отменяем generation если идёт (после переключения это будет уже не наш ответ)
+            engine.stopGeneration()
+
+            // Загружаем messages из БД
+            val rows = if (isNew) emptyList() else ChatRepository.getMessages(chatId)
+            android.util.Log.i("MainViewModel", "selectChat: chatId=$chatId, isNew=$isNew, rows=${rows.size}")
+            _messages.value = rows.map {
+                ChatMessage(
+                    text = it.content,
+                    isUser = it.role == "user",
+                    thinkingText = "", // Stage 1: thinking не персистится отдельно, оставляем пустым
+                )
+            }
+
+            // Engine: reset to system_only state (это автоматически очищает KV и
+            // re-decode'ит system prompt).
+            engine.setSystemPrompt(SYSTEM_PROMPT)
+
+            // Replay истории в KV — каждое сообщение через addMessageToHistory.
+            // На ошибке (например context overflow) — прерываем replay, оставляем UI
+            // как есть. Модель будет иметь truncated context, пользователь увидит
+            // всю историю в UI но модель «помнит» только то что влезло.
+            for (row in rows) {
+                val rc = engine.addMessageToHistory(row.role, row.content)
+                if (rc != 0) {
+                    android.util.Log.w(
+                        "MainViewModel",
+                        "Chat replay stopped at message ${row.id} (role=${row.role}, rc=$rc) — KV state truncated"
+                    )
+                    break
+                }
+            }
+
+            _currentChatId.value = chatId
+            _totalTokens.value = engine.getCurrentPos()
+            ChatRepository.touchChat(chatId)
+            refreshChats()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Пользователь нажал back во время switch'а — откатываем UI на ChatList.
+            // KV state в engine остаётся partial (часть сообщений decoded), но это OK:
+            // следующий selectChat сделает setSystemPrompt → reset_chat_state → wipe.
+            android.util.Log.i("MainViewModel", "selectChat cancelled by user for id=$chatId")
+            _screen.value = AppScreen.ChatList
+            _messages.value = emptyList()
+            _currentChatId.value = null
+            throw e  // rethrow обязателен — structured concurrency
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "selectChat failed for id=$chatId", e)
+            _screen.value = AppScreen.ChatList
+        } finally {
+            _isSwitchingChat.value = false
+        }
+    }
+
+    /** Удаляет чат (CASCADE: messages, summary, локальные facts). */
+    fun deleteChat(chatId: Long) {
+        viewModelScope.launch {
+            try {
+                ChatRepository.deleteChat(chatId)
+                // Если удалили текущий открытый чат — закрываем его в UI тоже
+                if (_currentChatId.value == chatId) {
+                    _currentChatId.value = null
+                    _messages.value = emptyList()
+                    _screen.value = AppScreen.ChatList
+                }
+                refreshChats()
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "deleteChat failed for id=$chatId", e)
+            }
+        }
+    }
+
+    /** Из ChatScreen возвращает на ChatList без unload'а модели. */
+    fun backToChatList() {
+        // Останавливаем active generation если есть — после возврата контекст не наш
+        cancelRequested = true
+        engine.stopGeneration()
+        // Если идёт chat switch (ensureModelLoaded или replay) — прерываем его. Cancel
+        // дойдёт до ближайшего suspend point (между addMessageToHistory'ами или
+        // внутри ensureModelLoaded's delay loop) и selectChatInternal'ы CancellationException
+        // handler сделает UI cleanup. engine.cancelLoading нужен на случай если model
+        // ещё грузится — без него native load доработает до конца до выхода cancel'а.
+        engine.cancelLoading()
+        chatSwitchJob?.cancel()
+        chatSwitchJob = null
+        _currentChatId.value = null
+        _messages.value = emptyList()
+        _screen.value = AppScreen.ChatList
     }
 
 
@@ -484,6 +812,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopGeneration() {
+        cancelRequested = true
         engine.stopGeneration()
     }
 

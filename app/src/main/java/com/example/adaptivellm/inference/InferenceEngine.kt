@@ -49,6 +49,22 @@ interface InferenceEngine {
      * fully created).
      */
     fun cancelLoading()
+
+    /**
+     * Decodes a historical message (already-completed turn) into KV cache without
+     * triggering generation. Used during chat switching to replay conversation
+     * history so the model has context when user continues the dialog.
+     *
+     * Каждое сообщение форматируется через template legacy path и декодируется
+     * sequentially после [setSystemPrompt]. Порядок вызовов должен совпадать с
+     * порядком сообщений в чате: user, assistant, user, assistant, ...
+     *
+     * @param role "user" или "assistant" — для каждой role своя обёртка в template
+     * @param text plain text сообщения (для assistant — clean без `<think>...</think>`)
+     * @return 0 на успех; отрицательное значение на ошибку (-1=модель не загружена,
+     *         -2=недостаточно места в context, -3=decode failed)
+     */
+    suspend fun addMessageToHistory(role: String, text: String): Int
     fun sendMessage(message: String, maxTokens: Int = 4096): Flow<String>
     fun getSystemInfo(): String
     fun getBackendName(): String
