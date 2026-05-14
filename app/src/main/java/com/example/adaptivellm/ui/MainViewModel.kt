@@ -18,8 +18,10 @@ import com.example.adaptivellm.model.ModelCatalog
 import com.example.adaptivellm.model.ModelDownloader
 import com.example.adaptivellm.model.ModelSelector
 import com.example.adaptivellm.model.ModelVariant
+import com.example.adaptivellm.retrieval.RetrievalEngine
 import com.example.adaptivellm.storage.ChatKvCacheManager
 import com.example.adaptivellm.storage.ChatRepository
+import com.example.adaptivellm.storage.FactsRepository
 import com.example.adaptivellm.storage.MemoryDatabaseHelper
 import com.example.adaptivellm.storage.SnapshotBaseManager
 import com.example.adaptivellm.update.ApkInstaller
@@ -89,6 +91,93 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Абсолютный путь к temp файлу persist test'а (Stage 2). */
     private val persistTestPath: String
         get() = File(getApplication<Application>().filesDir, PERSIST_TEST_FILE).absolutePath
+
+    /**
+     * Smoke test для retrieval pipeline (Stage 3.2). Вставляет 5 sample фактов
+     * (по одному на категорию) с embedding'ами и прогоняет несколько queries,
+     * логируя top-K + score breakdown. Запускается ТОЛЬКО если facts табл.
+     * пустая — чтобы повторные запуски приложения не плодили дубликаты.
+     *
+     * Результат — в logcat (`RetrievalEngine` + `MainViewModel`). UI не трогаем,
+     * пока нет dev panel (Stage 3.3).
+     */
+    private suspend fun runRetrievalSmokeTest() {
+        try {
+            // Ensure DB is ready — embedding init и DB init запускаются в parallel,
+            // у retrieval нет гарантии что DB уже initialized. Вызов идемпотентен:
+            // если init завершен — мгновенный return, иначе ждём на dbDispatcher.
+            MemoryDatabaseHelper.initialize(getApplication())
+            val existing = FactsRepository.countActive()
+            if (existing > 0) {
+                android.util.Log.i("MainViewModel",
+                    "Retrieval smoke test: $existing facts already in DB — skip seeding, run queries only")
+                runRetrievalSmokeQueries()
+                return
+            }
+            android.util.Log.i("MainViewModel", "Retrieval smoke test: seeding 5 sample facts...")
+
+            data class Seed(val content: String, val keywords: List<String>, val context: String,
+                            val category: String, val importance: Int, val eventDate: Long? = null)
+
+            val seeds = listOf(
+                Seed("Пользователь любит играть в шахматы",
+                     listOf("шахматы", "хобби", "игра"),
+                     "Регулярно играет онлайн на досуге",
+                     "preference", 6),
+                Seed("Изучает Kotlin для дипломного Android-проекта",
+                     listOf("kotlin", "диплом", "android", "программирование"),
+                     "Стек: Compose, llama.cpp, on-device LLM",
+                     "goal", 8),
+                Seed("Живёт в Москве",
+                     listOf("москва", "город", "местоположение"),
+                     "Постоянное место жительства",
+                     "personal_info", 7),
+                Seed("Отвечать кратко, без лишних формальностей",
+                     listOf("краткость", "стиль", "общение"),
+                     "Предпочитаемый стиль общения ассистента",
+                     "instruction", 9),
+                Seed("Защита диплома 22 мая 2026",
+                     listOf("защита", "диплом", "дедлайн", "май"),
+                     "Финальная защита бакалаврской работы",
+                     "event", 9, eventDate = 1748908800L),  // 2026-06-03 ~ запас
+            )
+            for (s in seeds) {
+                val emb = EmbeddingModel.encode("${s.content}. Keywords: ${s.keywords.joinToString(", ")}. Context: ${s.context}")
+                FactsRepository.insertFact(
+                    content = s.content,
+                    keywords = s.keywords,
+                    context = s.context,
+                    category = s.category,
+                    importance = s.importance,
+                    embedding = emb,
+                    eventDate = s.eventDate,
+                )
+            }
+
+            runRetrievalSmokeQueries()
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "Retrieval smoke test failed", e)
+        }
+    }
+
+    /** Прогоняет 3 sample queries и логирует результаты с breakdown'ом. */
+    private suspend fun runRetrievalSmokeQueries() {
+        val queries = listOf(
+            "что я люблю делать в свободное время?",
+            "когда у меня важное событие?",
+            "что ты знаешь о моём городе?",
+        )
+        for (q in queries) {
+            val results = RetrievalEngine.retrieveFacts(q, currentChatId = null, topK = 5)
+            val breakdown = results.joinToString("\n  ") { sf ->
+                "[%.3f] (rel=%.2f rec=%.2f imp=%.2f rrf=%.4f) %s: %s".format(
+                    sf.score, sf.relevance, sf.recency, sf.importanceNorm, sf.rrfScore,
+                    sf.fact.category, sf.fact.content)
+            }
+            android.util.Log.i("MainViewModel",
+                "Query: \"$q\"\n  ${results.size} results:\n  $breakdown")
+        }
+    }
 
     /**
      * Smoke test для [EmbeddingModel] (Stage 3.1) — кодит 3 предложения,
@@ -369,6 +458,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 EmbeddingModel.initialize(application)
                 runEmbeddingSmokeTest()
+                // Stage 3.2 — retrieval pipeline smoke test (запустится только если
+                // facts таблица пустая, чтобы не плодить дубликаты при каждом старте)
+                runRetrievalSmokeTest()
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "EmbeddingModel init failed — retrieval disabled", e)
             }

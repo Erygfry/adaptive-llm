@@ -37,7 +37,7 @@ internal object MigrationRunner {
      */
     private val MIGRATION_FILES: Map<Int, String> = mapOf(
         1 to "db/migrations/001_init.sql",
-        // 2 to "db/migrations/002_add_xxx.sql",
+        // 2 to "db/migrations/002_xxx.sql",
     )
 
     /**

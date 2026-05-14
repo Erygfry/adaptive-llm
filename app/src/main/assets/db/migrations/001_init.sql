@@ -68,18 +68,29 @@ CREATE TABLE facts (
 );
 -- @@STATEMENT_END@@
 
--- FTS5 external content table — синхронизация через triggers (см. ниже)
+-- FTS5 external content table с trigram tokenizer.
+-- Trigram нужен для русского морфологического матчинга без stemmer'а: MATCH 'москве'
+-- матчит docs содержащие подстроку "москве" (на trigram уровне). Не полная
+-- лемматизация но достаточно для substring queries ("Kotlin" → goal fact с "Kotlin",
+-- "Москв" → "Москве/Москва" подстроки). Лемматизация — future work.
+-- Синхронизация с facts через triggers (см. ниже).
 CREATE VIRTUAL TABLE facts_fts USING fts5(
     content, keywords, context,
-    content='facts', content_rowid='id'
+    content='facts', content_rowid='id',
+    tokenize='trigram'
 );
 -- @@STATEMENT_END@@
 
--- sqlite-vec virtual table с partition key (category) и metadata column (valid_to)
+-- sqlite-vec virtual table с partition key (category) и metadata column (valid_to).
+-- ВАЖНО: sqlite-vec по default rejects NULL в metadata column'е. Чтобы избежать
+-- рискованной migration (DROP TABLE на vec0 падает), используем sentinel valid_to=0
+-- = «валидный». Invalidated rows удаляются триггером facts_invalidate (DELETE),
+-- так что колонка в facts_vec фактически redundant — но оставлена под architecture
+-- compatibility. Searches не фильтруют по valid_to (trigger handles).
 CREATE VIRTUAL TABLE facts_vec USING vec0(
     fact_id INTEGER PRIMARY KEY,
     category TEXT PARTITION KEY,                      -- 6 значений → 6 partitions, быстрый conflict check
-    valid_to INTEGER,                                 -- metadata: фильтр по актуальности
+    valid_to INTEGER,                                 -- sentinel: всегда 0 (см. FactsRepository.insertFact)
     embedding FLOAT[384]
 );
 -- @@STATEMENT_END@@
