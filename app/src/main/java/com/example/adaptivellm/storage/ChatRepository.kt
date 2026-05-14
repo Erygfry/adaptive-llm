@@ -123,6 +123,61 @@ object ChatRepository {
         check(rc == MemoryDatabase.SQLITE_OK) { "updateTitle failed: ${db.lastError()}" }
     }
 
+    /**
+     * Stage 2.2.2 — обновляет KV cache markers для чата. Вызывается после
+     * успешного save файла kv_cache.bin (chat exit / eviction Этап D.4).
+     *
+     * @param hasKvCache 1 если файл валиден на диске, 0 если файла нет
+     * @param lastMessageId id последнего сообщения которое попало в save'нутый
+     *   KV. После load этим значением определяем tail re-decode range.
+     */
+    suspend fun updateKvCacheState(
+        chatId: Long,
+        hasKvCache: Int,
+        lastMessageId: Long,
+    ) = withContext(MemoryDatabaseHelper.dbDispatcher) {
+        require(hasKvCache == 0 || hasKvCache == 1) { "hasKvCache must be 0 or 1" }
+        val db = MemoryDatabaseHelper.database()
+        val rc = db.exec(
+            "UPDATE chats SET has_kv_cache = $hasKvCache, " +
+            "kv_cache_last_message_id = $lastMessageId WHERE id = $chatId;"
+        )
+        check(rc == MemoryDatabase.SQLITE_OK) { "updateKvCacheState failed: ${db.lastError()}" }
+    }
+
+    /**
+     * Возвращает (has_kv_cache, kv_cache_last_message_id) для чата. Используется
+     * в [selectChatInternal] чтобы решить — пробовать load kv_cache.bin или нет.
+     * Возвращает null если чат не существует.
+     */
+    suspend fun getKvCacheState(chatId: Long): Pair<Int, Long>? = withContext(MemoryDatabaseHelper.dbDispatcher) {
+        val db = MemoryDatabaseHelper.database()
+        val json = db.queryToJson(
+            "SELECT has_kv_cache, kv_cache_last_message_id FROM chats WHERE id = $chatId;"
+        )
+        if (json.startsWith("ERROR")) error("getKvCacheState failed: $json")
+        val arr = org.json.JSONArray(json)
+        if (arr.length() == 0) return@withContext null
+        val obj = arr.getJSONObject(0)
+        obj.getInt("has_kv_cache") to obj.getLong("kv_cache_last_message_id")
+    }
+
+    /**
+     * Возвращает сообщения чата с id строго больше указанного. Используется для
+     * tail re-decode после kv_cache.bin load — декодируем только messages
+     * добавленные после save.
+     */
+    suspend fun getMessagesAfter(chatId: Long, afterId: Long): List<MessageRow> =
+        withContext(MemoryDatabaseHelper.dbDispatcher) {
+            val db = MemoryDatabaseHelper.database()
+            val json = db.queryToJson(
+                "SELECT id, chat_id, role, content, token_count, created_at " +
+                "FROM messages WHERE chat_id = $chatId AND id > $afterId ORDER BY id ASC;"
+            )
+            if (json.startsWith("ERROR")) error("getMessagesAfter failed: $json")
+            parseMessageList(json)
+        }
+
     // ─────────────────────────────────────────────────────────────────────────
     //  Messages
     // ─────────────────────────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ import com.example.adaptivellm.model.ModelCatalog
 import com.example.adaptivellm.model.ModelDownloader
 import com.example.adaptivellm.model.ModelSelector
 import com.example.adaptivellm.model.ModelVariant
+import com.example.adaptivellm.storage.ChatKvCacheManager
 import com.example.adaptivellm.storage.ChatRepository
 import com.example.adaptivellm.storage.MemoryDatabaseHelper
 import com.example.adaptivellm.storage.SnapshotBaseManager
@@ -150,6 +151,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Сохраняет per-chat kv_cache.bin при выходе из чата (Strategy A only).
+     * Также обновляет DB markers (has_kv_cache=1, kv_cache_last_message_id).
+     * На Strategy B / при отсутствии сообщений / save failure — no-op (DB не
+     * меняется, при следующем входе будет fallback на replay).
+     *
+     * НЕ должен бросать exceptions — chat exit это пользовательская навигация,
+     * любая проблема с save должна логиться но не блокировать UI.
+     */
+    private suspend fun saveChatKvCacheIfApplicable(chatId: Long) {
+        if (engine.supportsStatePersist.value != true) return
+        if (_systemPromptTokens <= 0) {
+            android.util.Log.w("MainViewModel",
+                "saveChatKvCache: _systemPromptTokens=$_systemPromptTokens, skip (selectChat не успел зафиксировать)")
+            return
+        }
+        try {
+            val saved = chatKvCache.save(
+                engine = engine,
+                chatId = chatId,
+                systemPromptTokens = _systemPromptTokens,
+                modelKey = currentModelKey(),
+                nCtx = nCtx,
+            )
+            if (saved) {
+                val lastMsg = ChatRepository.getMessages(chatId).lastOrNull()
+                val lastMsgId = lastMsg?.id ?: 0L
+                ChatRepository.updateKvCacheState(chatId, hasKvCache = 1, lastMessageId = lastMsgId)
+                android.util.Log.i("MainViewModel",
+                    "saveChatKvCache: chatId=$chatId saved, last_msg_id=$lastMsgId")
+            } else {
+                // Save failed — снимаем DB маркер если был
+                ChatRepository.updateKvCacheState(chatId, hasKvCache = 0, lastMessageId = 0L)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MainViewModel", "saveChatKvCache failed for chatId=$chatId", e)
+        }
+    }
+
+    /**
      * После успешного loadModelWithSystemPrompt — KV в state [system_only].
      * Сохраняем этот state в snapshot_base.bin (Strategy A only). Невалидные
      * существующие snapshot'ы автоматически перезатираются.
@@ -169,6 +209,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val engine: InferenceEngine = InferenceEngineImpl.getInstance(application)
     private val snapshotBase = SnapshotBaseManager(application)
+    private val chatKvCache = ChatKvCacheManager(application)
+
+    /**
+     * Количество токенов в системном промпте — фиксируется при первой настройке
+     * (load snapshot_base ИЛИ setSystemPrompt). Нужно для kv_cache.bin save
+     * чтобы при load восстановить g_system_pos через setSystemPos.
+     */
+    private var _systemPromptTokens: Int = 0
 
     private val downloader = ModelDownloader(application)
     private val analyticsLogger = AnalyticsLogger(application)
@@ -715,6 +763,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             engine.stopGeneration()       // flag для generation
             chatSwitchJob?.cancel()       // прерываем chat switch если идёт
             chatSwitchJob = null
+            // Если есть открытый чат — сохраняем его KV до unloadModel (после
+            // unload engine state будет очищен и save невозможен). Save sync,
+            // не fire-and-forget, чтобы успеть до unload.
+            val exitingChatId = _currentChatId.value
+            if (exitingChatId != null) {
+                saveChatKvCacheIfApplicable(exitingChatId)
+            }
             engine.unloadModel()          // ждёт завершения текущей операции на llamaDispatcher
             _messages.value = emptyList()
             _currentChatId.value = null
@@ -806,33 +861,67 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            // Engine: reset to [system_only] state. На Strategy A пробуем
-            // загрузить snapshot_base.bin (~50 ms) — radикально быстрее чем
-            // re-decode system prompt'а (~2-3 сек на A80). Fallback на
-            // setSystemPrompt если snapshot невалиден / отсутствует / load failed.
-            val snapshotLoaded = if (engine.supportsStatePersist.value == true) {
-                snapshotBase.load(
-                    engine = engine,
-                    systemPrompt = SYSTEM_PROMPT,
-                    modelKey = currentModelKey(),
-                    nCtx = nCtx,
-                )
-            } else false
-            if (!snapshotLoaded) {
-                engine.setSystemPrompt(SYSTEM_PROMPT)
-                // На Strategy A snapshot отсутствовал — создадим теперь, в фоне будущих
-                // переключений сэкономит время. Если предыдущая ensureSnapshotBaseSaved
-                // уже создала — это no-op (idempotent).
-                if (engine.supportsStatePersist.value == true) {
-                    snapshotBase.save(engine, SYSTEM_PROMPT, currentModelKey(), nCtx)
+            // ─── KV restoration: трёхуровневая fallback chain ───
+            // 1. Strategy A + has_kv_cache=1 → kv_cache.bin (full state, нулевой replay)
+            // 2. Strategy A + snapshot_base.bin валиден → snapshot_base + replay messages
+            // 3. setSystemPrompt (re-decode) + replay messages — current Stage 1 path
+            //
+            // На failure любого уровня переходим к следующему. Tail re-decode после
+            // успешного kv_cache load декодит ТОЛЬКО messages с id > last_message_id
+            // (типично 0 если save был чистый).
+
+            val strategyA = engine.supportsStatePersist.value == true
+
+            // Уровень 1: kv_cache.bin
+            var kvCacheLoaded = false
+            var tailMessages: List<ChatRepository.MessageRow> = emptyList()
+            if (strategyA && !isNew) {
+                val kvState = ChatRepository.getKvCacheState(chatId)
+                if (kvState != null && kvState.first == 1) {
+                    val lastSavedMsgId = kvState.second
+                    val sysTokens = chatKvCache.load(engine, chatId, currentModelKey(), nCtx)
+                    if (sysTokens != null) {
+                        _systemPromptTokens = sysTokens
+                        kvCacheLoaded = true
+                        // Сообщения добавленные после save (обычно 0) — нужен tail re-decode
+                        tailMessages = ChatRepository.getMessagesAfter(chatId, lastSavedMsgId)
+                        if (tailMessages.isNotEmpty()) {
+                            android.util.Log.i("MainViewModel",
+                                "selectChat: kv_cache loaded, ${tailMessages.size} tail messages to re-decode")
+                        }
+                    } else {
+                        // Load failed — manager уже invalidate'ил файлы, чистим DB маркер
+                        ChatRepository.updateKvCacheState(chatId, hasKvCache = 0, lastMessageId = 0L)
+                    }
                 }
             }
 
-            // Replay истории в KV — каждое сообщение через addMessageToHistory.
-            // На ошибке (например context overflow) — прерываем replay, оставляем UI
-            // как есть. Модель будет иметь truncated context, пользователь увидит
-            // всю историю в UI но модель «помнит» только то что влезло.
-            for (row in rows) {
+            // Уровень 2 + 3 (если kv_cache не загрузился): system_only state + full replay
+            val messagesToReplay: List<ChatRepository.MessageRow> = if (kvCacheLoaded) {
+                tailMessages
+            } else {
+                // Уровень 2: snapshot_base
+                val snapshotLoaded = if (strategyA) {
+                    snapshotBase.load(engine, SYSTEM_PROMPT, currentModelKey(), nCtx)
+                } else false
+
+                if (snapshotLoaded) {
+                    _systemPromptTokens = engine.getCurrentPos()
+                } else {
+                    // Уровень 3: setSystemPrompt (re-decode)
+                    engine.setSystemPrompt(SYSTEM_PROMPT)
+                    _systemPromptTokens = engine.getCurrentPos()
+                    if (strategyA) {
+                        // Создаём snapshot для будущих переключений (idempotent)
+                        snapshotBase.save(engine, SYSTEM_PROMPT, currentModelKey(), nCtx)
+                    }
+                }
+                rows
+            }
+
+            // Replay истории в KV (либо full если уровень 2/3, либо tail если уровень 1).
+            // На ошибке (context overflow) — прерываем, UI остаётся consistent.
+            for (row in messagesToReplay) {
                 val rc = engine.addMessageToHistory(row.role, row.content)
                 if (rc != 0) {
                     android.util.Log.w(
@@ -864,11 +953,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Удаляет чат (CASCADE: messages, summary, локальные facts). */
+    /** Удаляет чат (CASCADE: messages, summary, локальные facts) + KV cache файлы. */
     fun deleteChat(chatId: Long) {
         viewModelScope.launch {
             try {
                 ChatRepository.deleteChat(chatId)
+                // Удаляем kv_cache файлы (если были). FS-операция, не нуждается в DB
+                // (CASCADE удалит chats row → has_kv_cache marker неактуален).
+                chatKvCache.invalidate(chatId)
                 // Если удалили текущий открытый чат — закрываем его в UI тоже
                 if (_currentChatId.value == chatId) {
                     _currentChatId.value = null
@@ -895,9 +987,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         engine.cancelLoading()
         chatSwitchJob?.cancel()
         chatSwitchJob = null
+        val exitingChatId = _currentChatId.value
         _currentChatId.value = null
         _messages.value = emptyList()
         _screen.value = AppScreen.ChatList
+        // Сохраняем KV state текущего чата (Strategy A only). Запускаем в фоне —
+        // UI уже на ChatList, save не блокирует пользователя. Сохранение
+        // выполняется на llamaDispatcher serialized с другими engine ops.
+        if (exitingChatId != null) {
+            viewModelScope.launch {
+                saveChatKvCacheIfApplicable(exitingChatId)
+            }
+        }
     }
 
 
