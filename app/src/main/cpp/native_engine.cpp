@@ -1254,9 +1254,10 @@ extern "C"
     // Загружает state sequence 0 из файла. После успешного load:
     //   - g_token_history заменяется tokens'ами из файла
     //   - g_current_pos выставляется = n_tokens
-    //   - g_system_pos НЕ обновляется (caller знает структуру и обновит сам, если
-    //     нужно — обычно после load вызывается tail re-decode, и system_pos
-    //     остаётся 0 чтобы proactive_reset re-инжектил весь system prompt)
+    //   - g_system_pos НЕ обновляется (caller знает структуру и обновит сам через
+    //     nativeSetSystemPos). Для snapshot_base (содержит только system) caller
+    //     вызывает setSystemPos(getCurrentPos()). Для per-chat kv_cache (содержит
+    //     [system + ...]) caller подставляет известный system prompt token count.
     //
     // Returns: 0 success, 1 model not loaded, 2 load failed
     JNIEXPORT jint JNICALL
@@ -1291,6 +1292,21 @@ extern "C"
         LOGi("nativeStateLoadFile: read %zu bytes, %zu tokens, current_pos=%d",
              bytes, n_loaded, (int)g_current_pos);
         return 0;
+    }
+
+    // Выставляет g_system_pos вручную. Нужно после nativeStateLoadFile чтобы
+    // shift_context / proactive_reset знали сколько токенов в начале — system
+    // prompt. Для snapshot_base.bin (только system) → setSystemPos(getCurrentPos()).
+    // Для per-chat kv_cache.bin (Stage 2.2.2) → setSystemPos(saved_system_token_count).
+    //
+    // Без этого вызова после load: g_system_pos = 0, shift_context discard'ит
+    // system prompt тоже, proactive_reset re-decode'ит system поверх loaded state.
+    JNIEXPORT void JNICALL
+    Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeSetSystemPos(
+        JNIEnv *, jobject, jint pos)
+    {
+        g_system_pos = (llama_pos)pos;
+        LOGi("nativeSetSystemPos: g_system_pos=%d", (int)g_system_pos);
     }
 
     // Self-test для определения Strategy A / B (architecture.md § Backend

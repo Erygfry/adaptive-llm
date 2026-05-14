@@ -128,6 +128,20 @@ interface InferenceEngine {
     suspend fun stateLoadFile(path: String): Int
 
     /**
+     * Выставляет внутренний `g_system_pos` (количество токенов в начале KV
+     * cache занятых system prompt'ом). Нужно вызывать после [stateLoadFile]
+     * чтобы shift_context / proactive_reset знали границу system части.
+     *
+     * Примеры использования:
+     *   - После load snapshot_base.bin (только system) → setSystemPos(getCurrentPos())
+     *   - После load per-chat kv_cache.bin → setSystemPos(savedSystemTokenCount)
+     *
+     * Без вызова после load: shift_context может удалить system prompt из KV,
+     * proactive_reset — re-decode system поверх загруженного state.
+     */
+    suspend fun setSystemPos(pos: Int)
+
+    /**
      * Self-test для определения поддержки KV state persistence на текущем backend'е.
      * Декодирует тестовый prompt, делает save → clear → load → re-decode probe,
      * сравнивает cosine логитов. Если ≥ 0.999 → backend сохраняет state корректно

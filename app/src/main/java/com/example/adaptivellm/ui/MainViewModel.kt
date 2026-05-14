@@ -19,6 +19,7 @@ import com.example.adaptivellm.model.ModelSelector
 import com.example.adaptivellm.model.ModelVariant
 import com.example.adaptivellm.storage.ChatRepository
 import com.example.adaptivellm.storage.MemoryDatabaseHelper
+import com.example.adaptivellm.storage.SnapshotBaseManager
 import com.example.adaptivellm.update.ApkInstaller
 import android.content.Context
 import com.example.adaptivellm.update.ReleaseInfo
@@ -110,11 +111,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Variant для cache key'а в loadModelFromPath (нет ModelVariant, берём файл). */
     private fun persistTestCacheForFile(path: String): PersistTestCache {
-        val file = File(path)
-        val sizeMb = (file.length() / (1024 * 1024)).toInt()
+        val sizeMb = (File(path).length() / (1024 * 1024)).toInt()
+        val modelKey = modelKeyForFile(path, sizeMb)
         val prefs = getApplication<Application>()
             .getSharedPreferences("persist_test_cache", Context.MODE_PRIVATE)
-        val modelKey = "${file.name}_${sizeMb}MB_v${BuildConfig.VERSION_CODE}"
         return object : PersistTestCache {
             override fun get(backend: String): Boolean? =
                 prefs.getString("${modelKey}_${backend}", null)?.toBooleanStrictOrNull()
@@ -124,7 +124,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Идентификатор модели для cache keys (persist test, snapshot_base) — должен
+     * меняться при смене модели или APK update. Не включает backend (тот добавляется
+     * отдельно где нужно).
+     */
+    private fun modelKeyForVariant(variant: ModelVariant): String =
+        "${variant.fileName}_${variant.fileSizeMb}MB"
+
+    private fun modelKeyForFile(path: String, sizeMb: Int): String =
+        "${File(path).name}_${sizeMb}MB"
+
+    /**
+     * Возвращает modelKey текущей загруженной модели — приоритет local gguf
+     * (если выставлен) над selectedModel (downloaded variant).
+     */
+    private fun currentModelKey(): String {
+        val localPath = _localGgufPath
+        return if (localPath != null) {
+            val sizeMb = (File(localPath).length() / (1024 * 1024)).toInt()
+            modelKeyForFile(localPath, sizeMb)
+        } else {
+            modelKeyForVariant(_selectedModel.value)
+        }
+    }
+
+    /**
+     * После успешного loadModelWithSystemPrompt — KV в state [system_only].
+     * Сохраняем этот state в snapshot_base.bin (Strategy A only). Невалидные
+     * существующие snapshot'ы автоматически перезатираются.
+     */
+    private suspend fun ensureSnapshotBaseSaved(modelKey: String) {
+        if (engine.supportsStatePersist.value != true) return
+        val saved = snapshotBase.save(
+            engine = engine,
+            systemPrompt = SYSTEM_PROMPT,
+            modelKey = modelKey,
+            nCtx = nCtx,
+        )
+        if (!saved) {
+            android.util.Log.w("MainViewModel", "snapshot_base save failed — chat switching will use re-decode")
+        }
+    }
+
     val engine: InferenceEngine = InferenceEngineImpl.getInstance(application)
+    private val snapshotBase = SnapshotBaseManager(application)
 
     private val downloader = ModelDownloader(application)
     private val analyticsLogger = AnalyticsLogger(application)
@@ -305,6 +349,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     persistTestPath = persistTestPath,
                     persistTestCache = persistTestCacheForFile(path),
                 )
+                val sizeMb = (File(path).length() / (1024 * 1024)).toInt()
+                ensureSnapshotBaseSaved(modelKeyForFile(path, sizeMb))
                 _backendInfo.value = engine.getBackendName()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // User cancelled load via goBackToSetup — silent, no UI error.
@@ -464,6 +510,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 prefs.edit().putBoolean(KEY_VULKAN_CRASHED, false).apply()
             }
+            // KV сейчас в [system_only] — момент чтобы сохранить snapshot_base.
+            // На Strategy B no-op; на A — pisat/skip если файл уже валиден.
+            ensureSnapshotBaseSaved(modelKeyForVariant(variant))
             _backendInfo.value = engine.getBackendName()
             analyticsLogger.logModelLoaded(
                 modelName = variant.displayName,
@@ -757,9 +806,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            // Engine: reset to system_only state (это автоматически очищает KV и
-            // re-decode'ит system prompt).
-            engine.setSystemPrompt(SYSTEM_PROMPT)
+            // Engine: reset to [system_only] state. На Strategy A пробуем
+            // загрузить snapshot_base.bin (~50 ms) — radикально быстрее чем
+            // re-decode system prompt'а (~2-3 сек на A80). Fallback на
+            // setSystemPrompt если snapshot невалиден / отсутствует / load failed.
+            val snapshotLoaded = if (engine.supportsStatePersist.value == true) {
+                snapshotBase.load(
+                    engine = engine,
+                    systemPrompt = SYSTEM_PROMPT,
+                    modelKey = currentModelKey(),
+                    nCtx = nCtx,
+                )
+            } else false
+            if (!snapshotLoaded) {
+                engine.setSystemPrompt(SYSTEM_PROMPT)
+                // На Strategy A snapshot отсутствовал — создадим теперь, в фоне будущих
+                // переключений сэкономит время. Если предыдущая ensureSnapshotBaseSaved
+                // уже создала — это no-op (idempotent).
+                if (engine.supportsStatePersist.value == true) {
+                    snapshotBase.save(engine, SYSTEM_PROMPT, currentModelKey(), nCtx)
+                }
+            }
 
             // Replay истории в KV — каждое сообщение через addMessageToHistory.
             // На ошибке (например context overflow) — прерываем replay, оставляем UI

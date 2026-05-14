@@ -64,6 +64,7 @@ class InferenceEngineImpl private constructor(
     private external fun nativeStateSaveFile(path: String): Int
     private external fun nativeStateLoadFile(path: String): Int
     private external fun nativeStatePersistTest(tempPath: String): DoubleArray
+    private external fun nativeSetSystemPos(pos: Int)
 
 
 
@@ -282,6 +283,10 @@ class InferenceEngineImpl private constructor(
 
     override suspend fun statePersistTest(tempPath: String): DoubleArray = withContext(llamaDispatcher) {
         nativeStatePersistTest(tempPath)
+    }
+
+    override suspend fun setSystemPos(pos: Int) = withContext(llamaDispatcher) {
+        nativeSetSystemPos(pos)
     }
 
     override fun shutdown() {
