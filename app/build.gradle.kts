@@ -115,6 +115,17 @@ dependencies {
     // Networking
     implementation(libs.okhttp)
 
+    // ONNX Runtime + Extensions (Stage 3 — embedding модель USER2-small).
+    // onnxruntime-android 1.22+: official Microsoft, supports INT8 quantized models,
+    //   ~13 MB AAR. Версия 1.22+ имеет 16 KB page alignment fix (Play Store requirement).
+    // onnxruntime-extensions-android: custom ops библиотека от Microsoft, включающая
+    //   HuggingFace tokenizers как ONNX graph nodes. Это позволяет нам embedded
+    //   tokenizer прямо в .onnx модель — input строка, output embedding. Не нужна
+    //   отдельная JNI обёртка для tokenizer'а (DJL HF tokenizers не поддерживает
+    //   Android arm64, а pure-Kotlin BPE — много кода и риск багов).
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-extensions-android:0.13.0")
+
     // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

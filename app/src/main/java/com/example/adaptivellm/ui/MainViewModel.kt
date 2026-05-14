@@ -8,6 +8,7 @@ import com.example.adaptivellm.device.DeviceDetector
 import com.example.adaptivellm.device.DeviceProfile
 import com.example.adaptivellm.device.RamTier
 import com.example.adaptivellm.BuildConfig
+import com.example.adaptivellm.embedding.EmbeddingModel
 import com.example.adaptivellm.inference.InferenceEngine
 import com.example.adaptivellm.inference.InferenceEngineImpl
 import com.example.adaptivellm.inference.PersistTestCache
@@ -88,6 +89,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Абсолютный путь к temp файлу persist test'а (Stage 2). */
     private val persistTestPath: String
         get() = File(getApplication<Application>().filesDir, PERSIST_TEST_FILE).absolutePath
+
+    /**
+     * Smoke test для [EmbeddingModel] (Stage 3.1) — кодит 3 предложения,
+     * считает cosine similarity между парами. Близкие по смыслу должны иметь
+     * cosine ~0.7-0.95, далёкие ~0.3-0.5. Результат только в логах, не влияет
+     * на app flow.
+     */
+    private fun runEmbeddingSmokeTest() {
+        if (!EmbeddingModel.isInitialized) return
+        try {
+            val t0 = System.currentTimeMillis()
+            val a = EmbeddingModel.encode("Я люблю программировать на Kotlin")
+            val b = EmbeddingModel.encode("Мне нравится писать код на Kotlin")
+            val c = EmbeddingModel.encode("Сегодня хорошая погода, можно гулять")
+            val tEnc = System.currentTimeMillis() - t0
+            val ab = EmbeddingModel.cosineSimilarity(a, b)
+            val ac = EmbeddingModel.cosineSimilarity(a, c)
+            val bc = EmbeddingModel.cosineSimilarity(b, c)
+            android.util.Log.i("MainViewModel",
+                "EmbeddingModel smoke test: 3 encodes in ${tEnc}ms (~${tEnc / 3}ms each); " +
+                "cos(близкие)=$ab, cos(далёкие1)=$ac, cos(далёкие2)=$bc " +
+                "(ожидаем ab > ac, ab > bc)")
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "Embedding smoke test failed", e)
+        }
+    }
 
     /**
      * SharedPreferences-кэш для результата persist test'а. Ключ включает модель
@@ -332,6 +359,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 refreshChats()
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "MemoryDatabase init failed — memory features disabled", e)
+            }
+        }
+
+        // Initialize embedding model (Stage 3.1 — Phase 1 retrieval). Не блокирует
+        // chat flow — если упадёт, retrieval будет недоступен но всё остальное
+        // работает. Init выполняется в IO context (load 35 MB + create session).
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                EmbeddingModel.initialize(application)
+                runEmbeddingSmokeTest()
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "EmbeddingModel init failed — retrieval disabled", e)
             }
         }
 
@@ -1039,6 +1078,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             kotlinx.coroutines.runBlocking { MemoryDatabaseHelper.shutdown() }
         } catch (e: Exception) {
             android.util.Log.w("MainViewModel", "MemoryDatabase shutdown failed", e)
+        }
+        try {
+            EmbeddingModel.shutdown()
+        } catch (e: Exception) {
+            android.util.Log.w("MainViewModel", "EmbeddingModel shutdown failed", e)
         }
         super.onCleared()
     }
