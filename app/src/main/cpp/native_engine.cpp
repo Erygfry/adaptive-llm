@@ -116,6 +116,11 @@ static const common_ngram_simple_config g_ngram_config = {SPEC_N_GRAM, SPEC_N_DR
 static bool g_batch_initialized = false;
 static std::string g_system_prompt_text;
 
+// Stage 5: текущая GBNF grammar для sampler'а. Пустая = unconstrained generation.
+// При смене (set/clear) пересоздаём g_sampler через recreate_sampler() — нет
+// stable API для замены grammar на live sampler'е, поэтому проще re-init.
+static std::string g_current_grammar;
+
 // --- Helpers ---
 
 /**
@@ -383,6 +388,39 @@ static bool is_valid_utf8(const char *s)
     return true;
 }
 
+/**
+ * Пересоздаёт g_sampler с заданной grammar (пустая = unconstrained). Используется
+ * для:
+ *   - первичной инициализации в nativeLoadModel (grammar = "")
+ *   - применения grammar через nativeSetGrammar (Stage 5+, для structured output
+ *     в eviction LLM calls)
+ *   - очистки grammar через nativeClearGrammar (возврат к свободной generation)
+ *
+ * common_sampler не имеет API для in-place замены grammar, поэтому полное re-init.
+ * Стоимость — миллисекунды, происходит редко (при переходах между chat completion
+ * и system LLM calls в Stage 6+ eviction).
+ */
+static void recreate_sampler(const std::string &grammar)
+{
+    if (g_sampler) {
+        common_sampler_free(g_sampler);
+        g_sampler = nullptr;
+    }
+    common_params_sampling sparams;
+    sparams.temp = DEFAULT_TEMP;
+    sparams.penalty_repeat = 1.1f;
+    sparams.penalty_last_n = 64;
+    if (!grammar.empty()) {
+        // common_grammar — struct {type, grammar_string}. User-provided GBNF =
+        // COMMON_GRAMMAR_TYPE_USER (vs OUTPUT_FORMAT для JSON schemas или
+        // TOOL_CALLS для chat templates).
+        sparams.grammar = common_grammar(COMMON_GRAMMAR_TYPE_USER, grammar);
+    }
+    g_sampler = common_sampler_init(g_model, sparams);
+    g_current_grammar = grammar;
+    LOGi("recreate_sampler: grammar_len=%zu", grammar.size());
+}
+
 static void reset_chat_state(bool clear_kv = true)
 {
     g_chat_msgs.clear();
@@ -550,11 +588,9 @@ extern "C"
         g_batch = llama_batch_init(BATCH_SIZE, 0, 1);
         g_batch_initialized = true;
         g_chat_templates = common_chat_templates_init(g_model, "");
-        common_params_sampling sparams;
-        sparams.temp = DEFAULT_TEMP;
-        sparams.penalty_repeat = 1.1f;
-        sparams.penalty_last_n = 64;
-        g_sampler = common_sampler_init(g_model, sparams);
+        // Initial sampler без grammar — будет применена по nativeSetGrammar при
+        // необходимости (Stage 6 eviction calls).
+        recreate_sampler("");
 
         detect_shift_support();
         reset_chat_state(false);
@@ -1526,6 +1562,50 @@ extern "C"
         const jdouble values[3] = { cosine, save_seconds, load_seconds };
         env->SetDoubleArrayRegion(result, 0, 3, values);
         return result;
+    }
+
+    // =============================================================================
+    // Stage 5 — GBNF grammar support
+    //
+    // nativeSetGrammar(gbnf) — пересоздаёт sampler с заданной grammar. Generation
+    // через nativeGenerateToken будет ограничена правилами GBNF (например forced
+    // JSON output для eviction extraction, ADD|UPDATE|NOOP для conflict resolution).
+    //
+    // nativeClearGrammar() — возвращает sampler в unconstrained состояние.
+    //
+    // Caller responsibility: вызывать set/clear до начала generation flow (т.е. до
+    // nativeProcessUserPrompt). Менять grammar mid-generation не безопасно — sampler
+    // hold'ит state, грамматика влияет на logit filtering.
+    //
+    // Стоимость re-init sampler'а — миллисекунды, на фоне prefill/generation
+    // незначима.
+    // =============================================================================
+
+    JNIEXPORT jint JNICALL
+    Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeSetGrammar(
+        JNIEnv *env, jobject, jstring jGrammar)
+    {
+        if (!g_model) {
+            LOGe("nativeSetGrammar: model not loaded");
+            return 1;
+        }
+        const char *raw = env->GetStringUTFChars(jGrammar, nullptr);
+        std::string grammar(raw ? raw : "");
+        env->ReleaseStringUTFChars(jGrammar, raw);
+        recreate_sampler(grammar);
+        return 0;
+    }
+
+    JNIEXPORT jint JNICALL
+    Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeClearGrammar(
+        JNIEnv *, jobject)
+    {
+        if (!g_model) {
+            LOGe("nativeClearGrammar: model not loaded");
+            return 1;
+        }
+        recreate_sampler("");
+        return 0;
     }
 
 } // extern "C"

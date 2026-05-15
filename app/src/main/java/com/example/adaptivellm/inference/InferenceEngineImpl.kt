@@ -65,6 +65,8 @@ class InferenceEngineImpl private constructor(
     private external fun nativeStateLoadFile(path: String): Int
     private external fun nativeStatePersistTest(tempPath: String): DoubleArray
     private external fun nativeSetSystemPos(pos: Int)
+    private external fun nativeSetGrammar(gbnf: String): Int
+    private external fun nativeClearGrammar(): Int
 
 
 
@@ -287,6 +289,20 @@ class InferenceEngineImpl private constructor(
 
     override suspend fun setSystemPos(pos: Int) = withContext(llamaDispatcher) {
         nativeSetSystemPos(pos)
+    }
+
+    override suspend fun setGrammar(gbnf: String?) = withContext(llamaDispatcher) {
+        if (gbnf.isNullOrBlank()) {
+            nativeClearGrammar()
+        } else {
+            nativeSetGrammar(gbnf)
+        }
+        Unit
+    }
+
+    override suspend fun clearGrammar() = withContext(llamaDispatcher) {
+        nativeClearGrammar()
+        Unit
     }
 
     override fun shutdown() {

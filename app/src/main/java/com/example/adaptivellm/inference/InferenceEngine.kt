@@ -128,6 +128,26 @@ interface InferenceEngine {
     suspend fun stateLoadFile(path: String): Int
 
     /**
+     * Stage 5 — устанавливает GBNF grammar для sampler'а. Последующие
+     * [sendMessage] вызовы будут constrain'ить output по грамматике.
+     *
+     * Пример (forced JSON для eviction extraction):
+     * ```
+     * root ::= "{" ws "\"summary\":" ws object ws "," ws "\"facts\":" ws array ws "}"
+     * ```
+     * Пример (выбор из enum для conflict resolution):
+     * ```
+     * root ::= "ADD" | "UPDATE" | "NOOP"
+     * ```
+     *
+     * @param gbnf grammar text. null или blank → clears (равно [clearGrammar])
+     */
+    suspend fun setGrammar(gbnf: String?)
+
+    /** Сбрасывает grammar — последующие generation будут unconstrained. */
+    suspend fun clearGrammar()
+
+    /**
      * Выставляет внутренний `g_system_pos` (количество токенов в начале KV
      * cache занятых system prompt'ом). Нужно вызывать после [stateLoadFile]
      * чтобы shift_context / proactive_reset знали границу system части.
