@@ -178,6 +178,160 @@ object ChatRepository {
             parseMessageList(json)
         }
 
+    /**
+     * Stage 6.1 — возвращает сообщения чата в id-range (включительно). Используется
+     * eviction'ом для извлечения "evicted block" — messages с id в [fromId, toId]
+     * для подачи в extraction prompt.
+     */
+    suspend fun getMessagesBetween(chatId: Long, fromId: Long, toId: Long): List<MessageRow> =
+        withContext(MemoryDatabaseHelper.dbDispatcher) {
+            val db = MemoryDatabaseHelper.database()
+            val json = db.queryToJson(
+                "SELECT id, chat_id, role, content, token_count, created_at " +
+                "FROM messages WHERE chat_id = $chatId " +
+                "AND id >= $fromId AND id <= $toId ORDER BY id ASC;"
+            )
+            if (json.startsWith("ERROR")) error("getMessagesBetween failed: $json")
+            parseMessageList(json)
+        }
+
+    /**
+     * Stage 6.1 — обновляет token_count для message (требуется для cutoff_id
+     * calculation в eviction Шаге 4.1). Вызывается из sendMessage после decode'а
+     * (когда engine.tokenize(content) известно).
+     */
+    suspend fun updateMessageTokenCount(messageId: Long, tokenCount: Int) =
+        withContext(MemoryDatabaseHelper.dbDispatcher) {
+            val db = MemoryDatabaseHelper.database()
+            val rc = db.exec(
+                "UPDATE messages SET token_count = $tokenCount WHERE id = $messageId;"
+            )
+            check(rc == MemoryDatabase.SQLITE_OK) {
+                "updateMessageTokenCount failed: ${db.lastError()}"
+            }
+        }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Summary (Stage 6.1 — Phase 4 eviction)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Structured summary для chat'а (architecture.md § Summary). */
+    data class Summary(
+        val chatId: Long,
+        val userProfile: String,
+        val ongoingTopics: String,
+        val keyDecisions: String,
+        val pendingItems: String,
+        val anchorMessageId: Long,
+        val tokenCount: Int,
+        val mergeCount: Int,
+        val updatedAt: Long,
+    ) {
+        /** true если summary ни разу не обновлялся (свежесозданный чат). */
+        val isEmpty: Boolean get() = mergeCount == 0 && anchorMessageId == 0L
+    }
+
+    /** Возвращает summary чата. Не-null если чат существует (Stage 1 createChat создаёт пустой summary). */
+    suspend fun getSummary(chatId: Long): Summary? = withContext(MemoryDatabaseHelper.dbDispatcher) {
+        val db = MemoryDatabaseHelper.database()
+        val json = db.queryToJson(
+            "SELECT chat_id, user_profile, ongoing_topics, key_decisions, pending_items, " +
+            "anchor_message_id, token_count, merge_count, updated_at " +
+            "FROM summary WHERE chat_id = $chatId;"
+        )
+        if (json.startsWith("ERROR")) error("getSummary failed: $json")
+        val arr = org.json.JSONArray(json)
+        if (arr.length() == 0) return@withContext null
+        val obj = arr.getJSONObject(0)
+        Summary(
+            chatId = obj.getLong("chat_id"),
+            userProfile = obj.optString("user_profile", ""),
+            ongoingTopics = obj.optString("ongoing_topics", ""),
+            keyDecisions = obj.optString("key_decisions", ""),
+            pendingItems = obj.optString("pending_items", ""),
+            anchorMessageId = obj.optLong("anchor_message_id", 0L),
+            tokenCount = obj.optInt("token_count", 0),
+            mergeCount = obj.optInt("merge_count", 0),
+            updatedAt = obj.optLong("updated_at", 0L),
+        )
+    }
+
+    /**
+     * Обновляет summary целиком — вызывается из eviction'а после успешного
+     * extraction'а. merge_count инкрементируется автоматически, updated_at
+     * выставляется на текущий unix timestamp.
+     */
+    suspend fun updateSummary(
+        chatId: Long,
+        userProfile: String,
+        ongoingTopics: String,
+        keyDecisions: String,
+        pendingItems: String,
+        anchorMessageId: Long,
+        tokenCount: Int,
+    ) = withContext(MemoryDatabaseHelper.dbDispatcher) {
+        val db = MemoryDatabaseHelper.database()
+        val now = nowSec()
+        val rc = db.exec(
+            "UPDATE summary SET " +
+            "user_profile = '${escapeSqlString(userProfile)}', " +
+            "ongoing_topics = '${escapeSqlString(ongoingTopics)}', " +
+            "key_decisions = '${escapeSqlString(keyDecisions)}', " +
+            "pending_items = '${escapeSqlString(pendingItems)}', " +
+            "anchor_message_id = $anchorMessageId, " +
+            "token_count = $tokenCount, " +
+            "merge_count = merge_count + 1, " +
+            "updated_at = $now " +
+            "WHERE chat_id = $chatId;"
+        )
+        check(rc == MemoryDatabase.SQLITE_OK) { "updateSummary failed: ${db.lastError()}" }
+        Log.i(TAG, "updateSummary: chatId=$chatId, anchor=$anchorMessageId, tokens=$tokenCount")
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Eviction state (chats.eviction_state)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Возвращает eviction_state чата ('idle' | 'in_progress'). null если чат не существует. */
+    suspend fun getEvictionState(chatId: Long): String? = withContext(MemoryDatabaseHelper.dbDispatcher) {
+        val db = MemoryDatabaseHelper.database()
+        val json = db.queryToJson(
+            "SELECT eviction_state FROM chats WHERE id = $chatId;"
+        )
+        if (json.startsWith("ERROR")) error("getEvictionState failed: $json")
+        val arr = org.json.JSONArray(json)
+        if (arr.length() == 0) return@withContext null
+        arr.getJSONObject(0).optString("eviction_state", "idle")
+    }
+
+    /** Атомарно выставляет eviction_state. Используется А.1 (in_progress) и C.5 (idle). */
+    suspend fun setEvictionState(chatId: Long, state: String) =
+        withContext(MemoryDatabaseHelper.dbDispatcher) {
+            require(state == "idle" || state == "in_progress") {
+                "Invalid eviction_state: $state"
+            }
+            val db = MemoryDatabaseHelper.database()
+            val rc = db.exec(
+                "UPDATE chats SET eviction_state = '$state' WHERE id = $chatId;"
+            )
+            check(rc == MemoryDatabase.SQLITE_OK) { "setEvictionState failed: ${db.lastError()}" }
+        }
+
+    /**
+     * Возвращает id'шники чатов в state 'in_progress' (для recovery on bootstrap
+     * в Stage 6.3). Не-empty значит крах произошёл во время eviction'а — нужно
+     * либо re-run, либо rollback.
+     */
+    suspend fun getChatsInEviction(): List<Long> = withContext(MemoryDatabaseHelper.dbDispatcher) {
+        val db = MemoryDatabaseHelper.database()
+        val json = db.queryToJson(
+            "SELECT id FROM chats WHERE eviction_state = 'in_progress';"
+        )
+        if (json.startsWith("ERROR")) error("getChatsInEviction failed: $json")
+        val arr = org.json.JSONArray(json)
+        List(arr.length()) { arr.getJSONObject(it).getLong("id") }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     //  Messages
     // ─────────────────────────────────────────────────────────────────────────

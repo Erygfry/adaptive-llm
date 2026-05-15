@@ -69,6 +69,8 @@ fun ChatScreen(viewModel: MainViewModel) {
     val messages by viewModel.messages.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
     val isSwitchingChat by viewModel.isSwitchingChat.collectAsState()
+    val isEvicting by viewModel.isEvicting.collectAsState()
+    val evictionStatus by viewModel.evictionStatus.collectAsState()
     val tps by viewModel.tokensPerSecond.collectAsState()
     val backend by viewModel.backendInfo.collectAsState()
     val engineState by viewModel.engine.state.collectAsState()
@@ -150,7 +152,7 @@ fun ChatScreen(viewModel: MainViewModel) {
                 navigationIcon = {
                     IconButton(
                         onClick = { viewModel.backToChatList() },
-                        enabled = !isGenerating,
+                        enabled = !isGenerating && !isEvicting,
                     ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
@@ -166,6 +168,7 @@ fun ChatScreen(viewModel: MainViewModel) {
                         )
                         val tokenInfo = if (totalTokens > 0) " | $totalTokens/${viewModel.nCtx}" else ""
                         val statusText = when {
+                            isEvicting -> evictionStatus.ifBlank { "Сжатие истории чата..." }
                             isSwitchingChat -> "Загрузка чата..."
                             engineState is InferenceEngine.State.LoadingModel -> "Loading model..."
                             engineState is InferenceEngine.State.Generating -> "%.1f t/s | %s%s".format(tps, backend, tokenInfo)
@@ -223,7 +226,8 @@ fun ChatScreen(viewModel: MainViewModel) {
                     onValueChange = { inputText = it },
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("Type a message...") },
-                    enabled = engineState is InferenceEngine.State.ModelLoaded && !isGenerating && !isSwitchingChat,
+                    enabled = engineState is InferenceEngine.State.ModelLoaded &&
+                              !isGenerating && !isSwitchingChat && !isEvicting,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(
                         onSend = {
@@ -312,7 +316,7 @@ fun ChatScreen(viewModel: MainViewModel) {
                         },
                         enabled = inputText.isNotBlank() &&
                                 engineState is InferenceEngine.State.ModelLoaded &&
-                                !isSwitchingChat,
+                                !isSwitchingChat && !isEvicting,
                     ) {
                         Icon(
                             Icons.Default.Send,

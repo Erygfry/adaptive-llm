@@ -67,6 +67,7 @@ class InferenceEngineImpl private constructor(
     private external fun nativeSetSystemPos(pos: Int)
     private external fun nativeSetGrammar(gbnf: String): Int
     private external fun nativeClearGrammar(): Int
+    private external fun nativeTokenize(text: String): Int
 
 
 
@@ -303,6 +304,10 @@ class InferenceEngineImpl private constructor(
     override suspend fun clearGrammar() = withContext(llamaDispatcher) {
         nativeClearGrammar()
         Unit
+    }
+
+    override suspend fun tokenize(text: String): Int = withContext(llamaDispatcher) {
+        nativeTokenize(text)
     }
 
     override fun shutdown() {

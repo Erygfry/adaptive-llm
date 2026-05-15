@@ -418,7 +418,12 @@ static void recreate_sampler(const std::string &grammar)
     }
     g_sampler = common_sampler_init(g_model, sparams);
     g_current_grammar = grammar;
-    LOGi("recreate_sampler: grammar_len=%zu", grammar.size());
+    if (!grammar.empty()) {
+        LOGi("recreate_sampler: grammar_len=%zu, first 200 chars:\n%.200s",
+             grammar.size(), grammar.c_str());
+    } else {
+        LOGi("recreate_sampler: grammar cleared");
+    }
 }
 
 static void reset_chat_state(bool clear_kv = true)
@@ -1606,6 +1611,36 @@ extern "C"
         }
         recreate_sampler("");
         return 0;
+    }
+
+    // =============================================================================
+    // Stage 6.1 — токенизация текста (без decode'а в KV)
+    //
+    // Возвращает количество токенов в text при tokenization через текущую модель.
+    // Используется в eviction logic (Шаг 4.1) для вычисления cutoff_id с учётом
+    // token budget: суммируем token_count'ы сообщений + system + summary, чтобы
+    // решить какой блок вытеснять.
+    //
+    // Параметры:
+    //   addBos / parseSpecial — обычно false для подсчёта content tokens
+    //   (BOS и special tokens добавляются template'ом в момент decode'а).
+    //
+    // Returns: количество токенов, или -1 если модель не загружена.
+    // =============================================================================
+    JNIEXPORT jint JNICALL
+    Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeTokenize(
+        JNIEnv *env, jobject, jstring jText)
+    {
+        if (!g_model || !g_context) {
+            LOGe("nativeTokenize: model not loaded");
+            return -1;
+        }
+        const char *raw = env->GetStringUTFChars(jText, nullptr);
+        std::string text(raw ? raw : "");
+        env->ReleaseStringUTFChars(jText, raw);
+        if (text.empty()) return 0;
+        auto tokens = common_tokenize(g_context, text, /*add_bos=*/false, /*parse_special=*/false);
+        return (jint)tokens.size();
     }
 
 } // extern "C"

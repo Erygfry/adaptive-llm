@@ -18,6 +18,7 @@ import com.example.adaptivellm.model.ModelCatalog
 import com.example.adaptivellm.model.ModelDownloader
 import com.example.adaptivellm.model.ModelSelector
 import com.example.adaptivellm.model.ModelVariant
+import com.example.adaptivellm.eviction.EvictionEngine
 import com.example.adaptivellm.prompt.PromptComposer
 import com.example.adaptivellm.retrieval.RetrievalEngine
 import com.example.adaptivellm.storage.ChatKvCacheManager
@@ -420,6 +421,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val _isSwitchingChat = MutableStateFlow(false)
     val isSwitchingChat: StateFlow<Boolean> = _isSwitchingChat.asStateFlow()
+
+    /**
+     * Stage 6.1 — true когда идёт Phase 4 eviction (LLM extraction call +
+     * DB writes + KV rebuild). UI блокирует ввод; eviction не может быть отменена
+     * (architecture.md § Eviction нельзя отменить).
+     */
+    private val _isEvicting = MutableStateFlow(false)
+    val isEvicting: StateFlow<Boolean> = _isEvicting.asStateFlow()
+
+    /** Подстатус для eviction UI («Анализ контекста...», «Восстановление...»). */
+    private val _evictionStatus = MutableStateFlow("")
+    val evictionStatus: StateFlow<String> = _evictionStatus.asStateFlow()
 
     /**
      * Job текущего [selectChatInternal] — нужен чтобы пользователь мог прервать
@@ -919,6 +932,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 batteryAfter = analyticsLogger.getBatteryPercent(),
                 tokenCount = tokenCount,
             )
+
+            // Stage 6.1 — eviction trigger после успешного turn'а. Запускается ТОЛЬКО
+            // если cancelRequested=false (юзер дождался ответа). На cancel не триггерим:
+            // KV состояние может быть partial, plus юзер ушёл — eviction не приоритет.
+            if (!cancelRequested) {
+                maybeRunEviction(chatId)
+            }
+        }
+    }
+
+    /**
+     * Stage 6.1 — проверяет T_max и запускает Phase 4 eviction если нужно.
+     * Блокирует UI через [_isEvicting] на время выполнения. Eviction нельзя
+     * отменить (architecture.md), поэтому back-навигация во время eviction'а
+     * ждёт его завершения.
+     */
+    private suspend fun maybeRunEviction(chatId: Long) {
+        if (engine.state.value !is InferenceEngine.State.ModelLoaded) return
+        // Проверка T_max — дешёвая, не блокируем UI пока не уверены что eviction нужна
+        val tMax = EvictionEngine.tMaxFor(deviceProfile.ramTier)
+        val currentPos = engine.getCurrentPos()
+        if (currentPos < tMax) return
+        // Strategy B (Vulkan) не имеет snapshot_base → setSystemPrompt fallback внутри
+        // EvictionEngine.runEvictionInternal сам справится через snapshotBase.load()
+        // возврат false.
+        _isEvicting.value = true
+        _evictionStatus.value = "Сжатие истории чата..."
+        try {
+            EvictionEngine.checkAndRun(
+                chatId = chatId,
+                engine = engine,
+                ramTier = deviceProfile.ramTier,
+                systemPrompt = SYSTEM_PROMPT,
+                snapshotBase = snapshotBase,
+                modelKey = currentModelKey(),
+                nCtx = nCtx,
+                currentThinkingMode = _thinkingMode.value,
+                onProgress = { status -> _evictionStatus.value = status },
+            )
+            // После eviction'а KV изменился — обновим totalTokens для UI
+            _totalTokens.value = engine.getCurrentPos()
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "Eviction failed for chatId=$chatId", e)
+        } finally {
+            _isEvicting.value = false
+            _evictionStatus.value = ""
         }
     }
 

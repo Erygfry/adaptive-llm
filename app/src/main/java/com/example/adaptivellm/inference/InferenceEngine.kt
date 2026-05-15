@@ -148,6 +148,14 @@ interface InferenceEngine {
     suspend fun clearGrammar()
 
     /**
+     * Stage 6.1 — токенизация текста БЕЗ decode'а в KV. Для подсчёта длины
+     * сообщений / summary / facts в eviction logic. Не модифицирует engine state.
+     *
+     * @return количество токенов или -1 если модель не загружена
+     */
+    suspend fun tokenize(text: String): Int
+
+    /**
      * Выставляет внутренний `g_system_pos` (количество токенов в начале KV
      * cache занятых system prompt'ом). Нужно вызывать после [stateLoadFile]
      * чтобы shift_context / proactive_reset знали границу system части.
