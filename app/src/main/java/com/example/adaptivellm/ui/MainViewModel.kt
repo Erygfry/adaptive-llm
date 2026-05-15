@@ -460,6 +460,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 MemoryDatabaseHelper.initialize(application)
                 refreshChats()
+                // Stage 6.3 — recovery: сбрасываем чаты застрявшие в
+                // eviction_state='in_progress' от crashed предыдущей сессии.
+                EvictionEngine.runRecoveryOnBootstrap()
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "MemoryDatabase init failed — memory features disabled", e)
             }
@@ -1170,16 +1173,65 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Replay истории в KV (либо full если уровень 2/3, либо tail если уровень 1).
-            // На ошибке (context overflow) — прерываем, UI остаётся consistent.
-            for (row in messagesToReplay) {
-                val rc = engine.addMessageToHistory(row.role, row.content)
-                if (rc != 0) {
-                    android.util.Log.w(
-                        "MainViewModel",
-                        "Chat replay stopped at message ${row.id} (role=${row.role}, rc=$rc) — KV state truncated"
+            // Stage 6.x post-fix: pre-decide eviction. Если replay сейчас превысит
+            // T_max — запускаем eviction ДО replay'я (экономим decode time, на Pixel
+            // Vulkan ~5-7 сек на сообщение). Eviction сама обработает evicted блок из
+            // DB через snapshot_base + extraction → rebuilt'ит KV в [system + last-N].
+            //
+            // Tokenize не нужен KV state — это чистый model-vocabulary lookup, можно
+            // делать в любой момент после loadModel. Concat'им post-anchor сообщения
+            // в одну строку и tokenize'им за один native call (~10-30 мс на десятки
+            // сообщений).
+            val needPreEviction = run {
+                if (kvCacheLoaded) return@run false  // KV state уже валидный (post-eviction)
+                if (messagesToReplay.isEmpty()) return@run false
+                val tMax = EvictionEngine.tMaxFor(deviceProfile.ramTier)
+                val concat = messagesToReplay.joinToString("\n") { it.content }
+                val replayTokens = engine.tokenize(concat)
+                val projected = _systemPromptTokens + replayTokens
+                val needEv = projected > tMax
+                android.util.Log.i("MainViewModel",
+                    "Pre-replay token budget: system=$_systemPromptTokens + replay=$replayTokens " +
+                    "= $projected vs T_max=$tMax → eviction ${if (needEv) "NEEDED" else "not needed"}")
+                needEv
+            }
+
+            if (needPreEviction) {
+                // Skip the replay loop entirely — eviction's runEvictionInternal will
+                // do its own [system_only] reset (via snapshot_base or setSystemPrompt)
+                // and re-decode summary + last-N at the end.
+                _isEvicting.value = true
+                _evictionStatus.value = "Сжатие истории чата..."
+                try {
+                    EvictionEngine.runEviction(
+                        chatId = chatId,
+                        engine = engine,
+                        ramTier = deviceProfile.ramTier,
+                        systemPrompt = SYSTEM_PROMPT,
+                        snapshotBase = snapshotBase,
+                        modelKey = currentModelKey(),
+                        nCtx = nCtx,
+                        currentThinkingMode = _thinkingMode.value,
+                        onProgress = { status -> _evictionStatus.value = status },
                     )
-                    break
+                } catch (e: Exception) {
+                    android.util.Log.e("MainViewModel", "Pre-replay eviction failed", e)
+                } finally {
+                    _isEvicting.value = false
+                    _evictionStatus.value = ""
+                }
+            } else {
+                // Replay истории в KV (либо full если уровень 2/3, либо tail если уровень 1).
+                // На ошибке (context overflow) — прерываем, UI остаётся consistent.
+                for (row in messagesToReplay) {
+                    val rc = engine.addMessageToHistory(row.role, row.content)
+                    if (rc != 0) {
+                        android.util.Log.w(
+                            "MainViewModel",
+                            "Chat replay stopped at message ${row.id} (role=${row.role}, rc=$rc) — KV state truncated"
+                        )
+                        break
+                    }
                 }
             }
 

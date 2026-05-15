@@ -332,6 +332,25 @@ object ChatRepository {
         List(arr.length()) { arr.getJSONObject(it).getLong("id") }
     }
 
+    /**
+     * Stage 6.3 debug helper — возвращает (id, eviction_state) для ВСЕХ чатов.
+     * Используется в recovery log'е для visibility при отладке (sqlite3 на
+     * device обычно недоступен).
+     */
+    suspend fun getAllChatEvictionStates(): List<Pair<Long, String>> =
+        withContext(MemoryDatabaseHelper.dbDispatcher) {
+            val db = MemoryDatabaseHelper.database()
+            val json = db.queryToJson(
+                "SELECT id, eviction_state FROM chats ORDER BY id ASC;"
+            )
+            if (json.startsWith("ERROR")) error("getAllChatEvictionStates failed: $json")
+            val arr = org.json.JSONArray(json)
+            List(arr.length()) {
+                val obj = arr.getJSONObject(it)
+                obj.getLong("id") to obj.optString("eviction_state", "?")
+            }
+        }
+
     // ─────────────────────────────────────────────────────────────────────────
     //  Messages
     // ─────────────────────────────────────────────────────────────────────────

@@ -77,6 +77,44 @@ object EvictionEngine {
     private const val MIN_LAST_N = 3
 
     /**
+     * Stage 6.3 — recovery на bootstrap. Сбрасывает state любых чатов
+     * застрявших в 'in_progress' (eviction крашнулась mid-flight в прошлой
+     * сессии). Simple-reset:
+     *   - facts вставленные до краха остаются в DB (best effort);
+     *   - summary update либо commit'нулся либо нет — partial state OK;
+     *   - state → 'idle' разблокирует чат;
+     *   - если T_max всё ещё превышен на следующем turn'е — eviction
+     *     re-trigger'нется естественным путём.
+     *
+     * Архитектура mandates full re-run eviction, но это сложно реализовать
+     * корректно при возможном partial-commit'е summary (anchor сдвинулся).
+     * Simple-reset — pragmatic MVP-вариант без data loss.
+     */
+    suspend fun runRecoveryOnBootstrap() {
+        // Debug: показываем полный статус всех чатов чтобы видеть какие из них
+        // потенциально stuck'нулись (sqlite3 на device обычно недоступен).
+        val allStates = ChatRepository.getAllChatEvictionStates()
+        Log.i(TAG, "Recovery: chat states snapshot: $allStates")
+
+        val stuck = ChatRepository.getChatsInEviction()
+        if (stuck.isEmpty()) {
+            Log.i(TAG, "Recovery: no chats stuck in eviction_state (clean state)")
+            return
+        }
+        Log.w(TAG, "Recovery: found ${stuck.size} chat(s) stuck in eviction_state='in_progress' " +
+                   "(likely crash mid-eviction in prev session): ids=$stuck")
+        for (chatId in stuck) {
+            try {
+                ChatRepository.setEvictionState(chatId, "idle")
+                Log.i(TAG, "Recovery: reset chatId=$chatId to idle. " +
+                           "Eviction will re-trigger naturally on next turn if T_max still exceeded.")
+            } catch (e: Exception) {
+                Log.e(TAG, "Recovery: failed to reset chatId=$chatId", e)
+            }
+        }
+    }
+
+    /**
      * Проверяет нужна ли eviction и запускает её если да. Поток:
      *   1. Get current KV usage from engine.getCurrentPos
      *   2. If < T_max → return false (no eviction)
@@ -102,9 +140,29 @@ object EvictionEngine {
         if (currentKvTokens < tMax) return false
 
         Log.i(TAG, "Eviction triggered: chatId=$chatId, current_pos=$currentKvTokens, T_max=$tMax")
-        onProgress("Анализ контекста...")
+        return runEviction(chatId, engine, ramTier, systemPrompt, snapshotBase,
+                           modelKey, nCtx, currentThinkingMode, onProgress)
+    }
 
-        // Этап A: mark in_progress
+    /**
+     * Force-run eviction (без current_pos vs T_max check). Используется на chat
+     * entry когда caller уже определил по token budget (через [InferenceEngine.tokenize])
+     * что после replay KV переполнится — запуск ДО replay'я экономит wasted decode.
+     *
+     * Reuses всю state machine A→D + conflict resolution из [runEvictionInternal].
+     */
+    suspend fun runEviction(
+        chatId: Long,
+        engine: InferenceEngine,
+        ramTier: RamTier,
+        systemPrompt: String,
+        snapshotBase: SnapshotBaseManager,
+        modelKey: String,
+        nCtx: Int,
+        currentThinkingMode: Int,
+        onProgress: (String) -> Unit = {},
+    ): Boolean {
+        onProgress("Анализ контекста...")
         ChatRepository.setEvictionState(chatId, "in_progress")
         try {
             runEvictionInternal(
@@ -115,7 +173,6 @@ object EvictionEngine {
         } catch (e: Exception) {
             Log.e(TAG, "Eviction failed for chatId=$chatId — rolling back state to idle", e)
             try { ChatRepository.setEvictionState(chatId, "idle") } catch (_: Exception) {}
-            // Restore thinking mode + clear grammar — на случай если упали посередине
             try { engine.clearGrammar() } catch (_: Exception) {}
             try { engine.setThinkingMode(currentThinkingMode) } catch (_: Exception) {}
             return false
