@@ -1131,7 +1131,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Уровень 2 + 3 (если kv_cache не загрузился): system_only state + full replay
+            // Уровень 2 + 3 (если kv_cache не загрузился): system_only state + replay.
+            // ВАЖНО (Stage 6.1 post-fix): replay'им только messages с id > anchor,
+            // т.е. сообщения которые остались в KV после последнего eviction'а
+            // (на свежесозданных чатах anchor=0 → все сообщения). Replay evicted
+            // сообщений противоречил бы цели eviction'а — KV сразу забивается до
+            // T_max'а. На Strategy A это не проблема (kv_cache.bin отражает
+            // post-eviction state), но Strategy B всегда падает на этот path.
             val messagesToReplay: List<ChatRepository.MessageRow> = if (kvCacheLoaded) {
                 tailMessages
             } else {
@@ -1151,7 +1157,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         snapshotBase.save(engine, SYSTEM_PROMPT, currentModelKey(), nCtx)
                     }
                 }
-                rows
+                // Берём только post-anchor сообщения. Если у чата не было
+                // eviction'а — anchor=0, и список совпадёт с rows.
+                val anchor = ChatRepository.getSummary(chatId)?.anchorMessageId ?: 0L
+                if (anchor > 0L) {
+                    val postAnchor = rows.filter { it.id > anchor }
+                    android.util.Log.i("MainViewModel",
+                        "Post-eviction replay: anchor=$anchor, replaying ${postAnchor.size} of ${rows.size} messages")
+                    postAnchor
+                } else {
+                    rows
+                }
             }
 
             // Replay истории в KV (либо full если уровень 2/3, либо tail если уровень 1).
