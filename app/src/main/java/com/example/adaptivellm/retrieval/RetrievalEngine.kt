@@ -37,6 +37,13 @@ object RetrievalEngine {
     private const val RECENCY_DECAY = 0.995
 
     /**
+     * true если retrieval pipeline можно использовать — то есть embedding модель
+     * успешно инициализирована. Возвращает false на момент bootstrap'а пока
+     * EmbeddingModel.initialize не отработала, и при init failure (degraded mode).
+     */
+    fun isReady(): Boolean = EmbeddingModel.isInitialized
+
+    /**
      * Скоринг факта после RRF merge. relevance, recency, importance — компоненты
      * (для debug), score — взвешенная сумма.
      */

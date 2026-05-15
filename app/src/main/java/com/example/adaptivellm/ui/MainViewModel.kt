@@ -18,6 +18,7 @@ import com.example.adaptivellm.model.ModelCatalog
 import com.example.adaptivellm.model.ModelDownloader
 import com.example.adaptivellm.model.ModelSelector
 import com.example.adaptivellm.model.ModelVariant
+import com.example.adaptivellm.prompt.PromptComposer
 import com.example.adaptivellm.retrieval.RetrievalEngine
 import com.example.adaptivellm.storage.ChatKvCacheManager
 import com.example.adaptivellm.storage.ChatRepository
@@ -604,6 +605,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         RamTier.LOW, RamTier.VERY_LOW -> 6144
     }
 
+    /**
+     * Top-K фактов для retrieval в зависимости от RAM tier (architecture.md
+     * § Параметры по группам контекста). Больше контекст → можем позволить
+     * больше фактов в prompt'е.
+     */
+    private fun topKFactsFor(tier: RamTier): Int = when (tier) {
+        RamTier.HIGH -> 12
+        RamTier.UPPER_MID -> 8
+        RamTier.MID -> 6
+        RamTier.LOW, RamTier.VERY_LOW -> 6
+    }
+
     private fun loadModel(variant: ModelVariant) {
         _loadedModelName.value = variant.displayName
         val useVulkan = shouldUseVulkan()
@@ -744,12 +757,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // сохранён (он видит его в UI, и в DB совпадает). Assistant сохраняется
             // только после успешного завершения generation.
             val isFirstMessage = _messages.value.count { it.isUser } == 1
+
+            // Stage 4: B-dirty prompt assembly. Загружаем активные instructions
+            // (Phase 1.3 — безусловно для текущего chat'а) и retrieved memories
+            // (Phases 1.1-1.2 — top-K semantic search), композим dirty form.
+            // На пустой БД фактов dirty == text → identical behavior как Stage 1-3.
+            val dirtyUserMsg: String = try {
+                val instructions = FactsRepository.getActiveInstructions(chatId)
+                val memories = if (RetrievalEngine.isReady()) {
+                    RetrievalEngine.retrieveFacts(text, chatId, topKFactsFor(deviceProfile.ramTier))
+                        .map { it.fact }
+                } else emptyList()
+                PromptComposer.compose(text, instructions, memories).also {
+                    if (it.length != text.length) {
+                        android.util.Log.i("MainViewModel",
+                            "B-dirty assembled: query=${text.length} chars → dirty=${it.length} chars " +
+                            "(instructions=${instructions.size}, memories=${memories.size})")
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("MainViewModel", "Prompt assembly failed — falling back to plain query", e)
+                text
+            }
+
             try {
-                val userMsgId = ChatRepository.addMessage(chatId, "user", text)
+                // Persist DIRTY form в БД (architecture mandates B-dirty в messages для
+                // cache_prompt prefix matching в Stage 6+ chat_completion API).
+                val userMsgId = ChatRepository.addMessage(chatId, "user", dirtyUserMsg)
                 android.util.Log.i("MainViewModel",
-                    "Persisted user message: chatId=$chatId, msgId=$userMsgId, len=${text.length}, " +
-                    "isFirstMsg=$isFirstMessage")
-                // Если это первое user сообщение в чате — сделаем auto-title из него
+                    "Persisted user message: chatId=$chatId, msgId=$userMsgId, " +
+                    "len=${dirtyUserMsg.length} (clean=${text.length}), isFirstMsg=$isFirstMessage")
+                // Если это первое user сообщение в чате — сделаем auto-title из CLEAN текста
                 if (isFirstMessage) {
                     val title = text.take(50).trim().ifBlank { "Чат" }
                     ChatRepository.updateTitle(chatId, title)
@@ -772,7 +810,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val thinkingActive = _thinkingMode.value == 1 && !engine.wasThinkingDisabled()
 
             var finalDisplayText = ""
-            engine.sendMessage(text).collect { token ->
+            // Engine получает DIRTY form — это попадёт в KV cache в виде с обёртками,
+            // что нужно для cache_prompt prefix matching на следующих turn'ах
+            // (architecture.md § Что попадает в KV cache между turn'ами).
+            engine.sendMessage(dirtyUserMsg).collect { token ->
                 responseBuilder.append(token)
                 tokenCount++
 
@@ -986,7 +1027,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             android.util.Log.i("MainViewModel", "selectChat: chatId=$chatId, isNew=$isNew, rows=${rows.size}")
             _messages.value = rows.map {
                 ChatMessage(
-                    text = it.content,
+                    // Stage 4: user-сообщения в БД лежат в B-dirty form (с обёртками
+                    // [USER INSTRUCTIONS] / [Relevant memories:]). Для UI display'а
+                    // strip'аем — пользователь должен видеть только свой query.
+                    // Assistant content уже clean (без обёрток), strip — no-op.
+                    text = if (it.role == "user") PromptComposer.stripDirty(it.content) else it.content,
                     isUser = it.role == "user",
                     thinkingText = "", // Stage 1: thinking не персистится отдельно, оставляем пустым
                 )
