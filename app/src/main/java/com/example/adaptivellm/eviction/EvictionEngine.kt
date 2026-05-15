@@ -179,66 +179,102 @@ object EvictionEngine {
             evictedMessages = evictedBlock,
         )
 
-        // Force NEVER thinking + GBNF JSON constraint
-        engine.setThinkingMode(2)  // 2 = NEVER
-        engine.setGrammar(ExtractionGbnf.GRAMMAR)
+        var insertedFacts = 0
+        var updatedFacts = 0
+        var skippedFacts = 0
+        var totalParsed = 0
 
-        val rawOutput: String = try {
-            val sb = StringBuilder()
-            engine.sendMessage(extractionPrompt, EXTRACTION_MAX_TOKENS).toList().forEach { sb.append(it) }
-            sb.toString()
+        // Architecture: thinking_mode=NEVER для ВСЕХ system LLM calls в eviction'е
+        // (extraction Шаг 4.2 + conflict resolution Шаг 4.4 + summary compression
+        // Шаг 4.3 если бы был). Один setThinkingMode на всё, restore в finally.
+        engine.setThinkingMode(2)  // NEVER
+        try {
+            // GBNF JSON constraint только на extraction call'е, у conflict
+            // resolution свои отдельные grammar'ы (DECISION / INSTRUCTION_GRAMMAR).
+            engine.setGrammar(ExtractionGbnf.GRAMMAR)
+            val rawOutput: String = try {
+                val sb = StringBuilder()
+                engine.sendMessage(extractionPrompt, EXTRACTION_MAX_TOKENS).toList().forEach { sb.append(it) }
+                sb.toString()
+            } finally {
+                engine.clearGrammar()
+            }
+            Log.i(TAG, "Шаг 4.2: extraction output ${rawOutput.length} chars")
+
+            // ─── Этап C — parse + apply to DB ────────────────────────────────
+            // Защита на случай если GBNF не примен'нулся (parse error в grammar):
+            // модель часто оборачивает JSON в markdown-fence ```json ... ```.
+            val cleanedJson = stripMarkdownFence(rawOutput.trim())
+            val json = try {
+                JSONObject(cleanedJson)
+            } catch (e: Exception) {
+                error("Extraction output is not valid JSON (GBNF should prevent this): ${e.message}, " +
+                      "raw=${rawOutput.take(500)}")
+            }
+
+            val summaryObj = json.getJSONObject("summary")
+            val newUserProfile = summaryObj.optString("user_profile", summary.userProfile)
+            val newOngoing = summaryObj.optString("ongoing_topics", summary.ongoingTopics)
+            val newDecisions = summaryObj.optString("key_decisions", summary.keyDecisions)
+            val newPending = summaryObj.optString("pending_items", summary.pendingItems)
+
+            val summaryText = buildSummaryText(newUserProfile, newOngoing, newDecisions, newPending)
+            val summaryTokens = engine.tokenize(summaryText)
+
+            ChatRepository.updateSummary(
+                chatId = chatId,
+                userProfile = newUserProfile,
+                ongoingTopics = newOngoing,
+                keyDecisions = newDecisions,
+                pendingItems = newPending,
+                anchorMessageId = newAnchorId,
+                tokenCount = summaryTokens,
+            )
+
+            // Стейдж 6.2: parse + conflict resolution (Шаг 4.4) per fact.
+            val factsArr = json.getJSONArray("facts")
+            val parsed: List<ExtractedFact> = (0 until factsArr.length()).mapNotNull { i ->
+                try {
+                    parseFactFromJson(factsArr.getJSONObject(i))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to parse fact #$i: ${e.message}")
+                    null
+                }
+            }
+            totalParsed = parsed.size
+            for ((idx, factObj) in parsed.withIndex()) {
+                if (parsed.size > 1) {
+                    onProgress("Дедупликация фактов (${idx + 1}/${parsed.size})...")
+                }
+                try {
+                    val result = resolveAndInsertFact(
+                        fact = factObj,
+                        chatId = chatId,
+                        engine = engine,
+                        snapshotBase = snapshotBase,
+                        systemPrompt = systemPrompt,
+                        modelKey = modelKey,
+                        nCtx = nCtx,
+                        sourceMessageId = evictedBlock.lastOrNull()?.id,
+                    )
+                    when (result) {
+                        ResolveResult.ADDED -> insertedFacts++
+                        ResolveResult.UPDATED -> updatedFacts++
+                        ResolveResult.NOOP -> skippedFacts++
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed conflict-resolve for fact '${factObj.content}': ${e.message}")
+                }
+            }
+            Log.i(TAG, "Этап C: summary updated (anchor=$newAnchorId, tokens=$summaryTokens), " +
+                       "facts: $insertedFacts added, $updatedFacts updated, $skippedFacts noop " +
+                       "($totalParsed total parsed)")
         } finally {
-            // Гарантировано откатываем sampler state — даже если LLM call упал
-            engine.clearGrammar()
+            // Restore thinking mode в любом случае — даже если extraction или
+            // conflict resolution упали посередине. Grammar уже cleared в своих
+            // inner finally'ях.
             engine.setThinkingMode(currentThinkingMode)
         }
-
-        Log.i(TAG, "Шаг 4.2: extraction output ${rawOutput.length} chars")
-
-        // ─── Этап C — parse + apply to DB ────────────────────────────────
-        // Защита на случай если GBNF не примен'нулся (parse error в grammar):
-        // модель часто оборачивает JSON в markdown-fence ```json ... ```.
-        // Strip'аем такие обёртки прежде чем парсить.
-        val cleanedJson = stripMarkdownFence(rawOutput.trim())
-        val json = try {
-            JSONObject(cleanedJson)
-        } catch (e: Exception) {
-            error("Extraction output is not valid JSON (GBNF should prevent this): ${e.message}, " +
-                  "raw=${rawOutput.take(500)}")
-        }
-
-        val summaryObj = json.getJSONObject("summary")
-        val newUserProfile = summaryObj.optString("user_profile", summary.userProfile)
-        val newOngoing = summaryObj.optString("ongoing_topics", summary.ongoingTopics)
-        val newDecisions = summaryObj.optString("key_decisions", summary.keyDecisions)
-        val newPending = summaryObj.optString("pending_items", summary.pendingItems)
-
-        val summaryText = buildSummaryText(newUserProfile, newOngoing, newDecisions, newPending)
-        val summaryTokens = engine.tokenize(summaryText)
-
-        ChatRepository.updateSummary(
-            chatId = chatId,
-            userProfile = newUserProfile,
-            ongoingTopics = newOngoing,
-            keyDecisions = newDecisions,
-            pendingItems = newPending,
-            anchorMessageId = newAnchorId,
-            tokenCount = summaryTokens,
-        )
-
-        val factsArr = json.getJSONArray("facts")
-        var insertedFacts = 0
-        for (i in 0 until factsArr.length()) {
-            try {
-                insertFactFromJson(factsArr.getJSONObject(i), chatId, evictedBlock)
-                insertedFacts++
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to insert fact #$i: ${e.message}")
-                // continue — best effort
-            }
-        }
-        Log.i(TAG, "Этап C: summary updated (anchor=$newAnchorId, tokens=$summaryTokens), " +
-                   "$insertedFacts/${factsArr.length()} facts inserted")
 
         // C.5: mark idle (architecture делает это атомарно с transaction'ом; у
         // нас raw DB ops, идемпотентность через recovery в Stage 6.3)
@@ -269,20 +305,46 @@ object EvictionEngine {
                        "next eviction may trigger sooner than expected")
         }
         Log.i(TAG, "Eviction complete: chatId=$chatId, evicted=${evictedBlock.size}, " +
-                   "kept=${keptLastN.size}, facts=$insertedFacts, final_kv=$finalPos")
+                   "kept=${keptLastN.size}, facts +$insertedFacts/~$updatedFacts/=$skippedFacts " +
+                   "(added/updated/noop), final_kv=$finalPos")
     }
 
-    private suspend fun insertFactFromJson(
-        obj: JSONObject,
-        chatId: Long,
-        evictedBlock: List<ChatRepository.MessageRow>,
-    ) {
+    /** Распарсенный fact из extraction JSON (до conflict resolution). */
+    private data class ExtractedFact(
+        val content: String,
+        val keywords: List<String>,
+        val context: String?,
+        val category: String,
+        val importance: Int,
+        val eventDate: Long?,
+    )
+
+    /** Результат [resolveAndInsertFact]. */
+    private enum class ResolveResult { ADDED, UPDATED, NOOP }
+
+    /** Cosine similarity порог при котором запускаем LLM conflict decision. */
+    private const val CONFLICT_SIMILARITY_THRESHOLD = 0.7f
+
+    /** Сколько кандидатов брать из vec search для conflict check. */
+    private const val CONFLICT_TOP_K = 5
+
+    /** Максимум output tokens для conflict decision LLM call (ADD/UPDATE/NOOP — 6 tokens max). */
+    private const val CONFLICT_DECISION_MAX_TOKENS = 16
+
+    /** Максимум output tokens для instruction conflict (id number или "none" — несколько digits). */
+    private const val INSTRUCTION_CONFLICT_MAX_TOKENS = 16
+
+    /**
+     * Парсит fact из JSON object'а от extraction LLM call'а. Throws при невалидной
+     * структуре (GBNF должна предотвратить, но defensive parse на всякий).
+     */
+    private fun parseFactFromJson(obj: JSONObject): ExtractedFact {
         val content = obj.getString("content").trim()
         require(content.isNotBlank()) { "fact.content is blank" }
 
         val keywordsArr = obj.getJSONArray("keywords")
         val keywords = List(keywordsArr.length()) { keywordsArr.getString(it) }
-        val context = obj.optString("context", "").trim()
+        val context = obj.optString("context", "").trim().ifBlank { null }
         val category = obj.getString("category")
         val importance = obj.getInt("importance").coerceIn(1, 10)
         val eventDateRaw = obj.opt("event_date")
@@ -293,30 +355,215 @@ object EvictionEngine {
         }
         // Schema constraint: event_date only for category='event'
         val finalEventDate = if (category == "event") eventDateUnix else null
+        return ExtractedFact(content, keywords, context, category, importance, finalEventDate)
+    }
 
-        // Composite embedding (architecture.md § Структура данных - Факт)
+    /**
+     * Conflict resolution + insert (Шаг 4.4 architecture).
+     *
+     * General path (все категории кроме instruction):
+     *   1. Composite embedding нового факта
+     *   2. Cross-category vec search → top-K кандидатов
+     *   3. Filter по cosine ≥ 0.7
+     *   4. Если высоко-similar пусто → ADD direct
+     *   5. Иначе: per-candidate LLM call с GBNF (ADD|UPDATE|NOOP)
+     *      - UPDATE на первом hit'е → invalidate старого + insert нового → DONE
+     *      - NOOP → skip new fact entirely (duplicate)
+     *      - ADD → continue к следующему кандидату
+     *   6. Если все ADD → finally insert новый
+     *
+     * Instruction path (special, architecture.md § «Special case для instruction»):
+     *   1. Load all active instructions
+     *   2. LLM call с GBNF (id | "none"): какая из existing вытесняется
+     *   3. Если id → invalidate тот + insert новый. Если "none" → просто insert.
+     */
+    private suspend fun resolveAndInsertFact(
+        fact: ExtractedFact,
+        chatId: Long,
+        engine: InferenceEngine,
+        snapshotBase: SnapshotBaseManager,
+        systemPrompt: String,
+        modelKey: String,
+        nCtx: Int,
+        sourceMessageId: Long?,
+    ): ResolveResult {
         val embText = buildString {
-            append(content)
-            if (keywords.isNotEmpty()) append(" Keywords: ").append(keywords.joinToString(", "))
-            if (context.isNotBlank()) append(" Context: ").append(context)
+            append(fact.content)
+            if (fact.keywords.isNotEmpty()) append(" Keywords: ").append(fact.keywords.joinToString(", "))
+            if (!fact.context.isNullOrBlank()) append(" Context: ").append(fact.context)
         }
         val embedding = EmbeddingModel.encode(embText)
 
-        // chat_id для Stage 6.1: глобальный (null) — MVP по architecture.md.
-        // source_message_id — берём последний evicted message id как proxy
-        // (точное соотношение факт↔message не отслеживаем).
-        FactsRepository.insertFact(
-            content = content,
-            keywords = keywords,
-            context = context.ifBlank { null },
-            category = category,
-            importance = importance,
-            embedding = embedding,
-            chatId = null,
-            sourceMessageId = evictedBlock.lastOrNull()?.id,
-            eventDate = finalEventDate,
-        )
+        // Special path для instruction
+        if (fact.category == "instruction") {
+            return resolveInstructionConflict(
+                fact, embedding, chatId, engine, snapshotBase,
+                systemPrompt, modelKey, nCtx, sourceMessageId,
+            )
+        }
+
+        // General path: cross-category vec search
+        val candidates = FactsRepository.searchVec(embedding, k = CONFLICT_TOP_K, chatId = null)
+        val highSimilar = candidates.mapNotNull { (id, dist) ->
+            // For unit-norm vectors: cos = 1 - L2² / 2
+            val cosine = (1f - (dist * dist) / 2f).coerceIn(0f, 1f)
+            if (cosine >= CONFLICT_SIMILARITY_THRESHOLD) id to cosine else null
+        }
+
+        if (highSimilar.isEmpty()) {
+            // No conflict — ADD direct
+            insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+            return ResolveResult.ADDED
+        }
+
+        // Per-candidate LLM decision
+        val factsById = FactsRepository.getByIds(highSimilar.map { it.first })
+        var sawNoopOrUpdate = false
+        for ((existingId, cosine) in highSimilar) {
+            val existing = factsById[existingId] ?: continue
+            val decision = runConflictDecision(
+                existing, fact, engine, snapshotBase,
+                systemPrompt, modelKey, nCtx,
+            )
+            Log.i(TAG, "Conflict: new='${fact.content.take(40)}' vs existing#${existing.id}='${existing.content.take(40)}' " +
+                       "(cos=${"%.3f".format(cosine)}) → $decision")
+            when (decision) {
+                "UPDATE" -> {
+                    val newId = insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+                    FactsRepository.invalidateFact(existing.id, supersededBy = newId)
+                    return ResolveResult.UPDATED
+                }
+                "NOOP" -> {
+                    sawNoopOrUpdate = true
+                    return ResolveResult.NOOP
+                }
+                else -> {
+                    // ADD — continue к следующему кандидату
+                }
+            }
+        }
+        // Все decisions = ADD (или пустые) → добавляем новый факт
+        if (!sawNoopOrUpdate) {
+            insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+            return ResolveResult.ADDED
+        }
+        return ResolveResult.NOOP  // unreachable но defensive
     }
+
+    /**
+     * Special path для category='instruction' (architecture.md § Шаг 4.4).
+     */
+    private suspend fun resolveInstructionConflict(
+        fact: ExtractedFact,
+        embedding: FloatArray,
+        chatId: Long,
+        engine: InferenceEngine,
+        snapshotBase: SnapshotBaseManager,
+        systemPrompt: String,
+        modelKey: String,
+        nCtx: Int,
+        sourceMessageId: Long?,
+    ): ResolveResult {
+        val activeInstructions = FactsRepository.getActiveInstructions(chatId = null)
+        if (activeInstructions.isEmpty()) {
+            insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+            return ResolveResult.ADDED
+        }
+
+        // Switch to clean context + GBNF
+        val snapshotLoaded = snapshotBase.load(engine, systemPrompt, modelKey, nCtx)
+        if (!snapshotLoaded) engine.setSystemPrompt(systemPrompt)
+        engine.setGrammar(ConflictGbnf.INSTRUCTION_GRAMMAR)
+        val output = try {
+            val prompt = ConflictPrompt.buildInstructionConflict(activeInstructions, fact.content)
+            val sb = StringBuilder()
+            engine.sendMessage(prompt, INSTRUCTION_CONFLICT_MAX_TOKENS).toList().forEach { sb.append(it) }
+            sb.toString().trim()
+        } finally {
+            engine.clearGrammar()
+        }
+
+        Log.i(TAG, "InstructionConflict: new='${fact.content.take(40)}', " +
+                   "active=${activeInstructions.size}, decision='$output'")
+
+        if (output == "none" || output.isBlank()) {
+            insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+            return ResolveResult.ADDED
+        }
+        val supersededId = output.toLongOrNull()
+        val target = activeInstructions.firstOrNull { it.id == supersededId }
+        if (target == null) {
+            // LLM выдала id'шник которого нет в active list (hallucination) →
+            // defensive: просто insert новый
+            Log.w(TAG, "InstructionConflict: LLM returned id=$output not in active list — just adding")
+            insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+            return ResolveResult.ADDED
+        }
+
+        val newId = insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+        FactsRepository.invalidateFact(target.id, supersededBy = newId)
+        return ResolveResult.UPDATED
+    }
+
+    /**
+     * Single LLM call: NEW vs EXISTING decision (ADD|UPDATE|NOOP). Switches
+     * context, applies GBNF, restores after.
+     */
+    private suspend fun runConflictDecision(
+        existing: FactsRepository.Fact,
+        newFact: ExtractedFact,
+        engine: InferenceEngine,
+        snapshotBase: SnapshotBaseManager,
+        systemPrompt: String,
+        modelKey: String,
+        nCtx: Int,
+    ): String {
+        val snapshotLoaded = snapshotBase.load(engine, systemPrompt, modelKey, nCtx)
+        if (!snapshotLoaded) engine.setSystemPrompt(systemPrompt)
+        engine.setGrammar(ConflictGbnf.DECISION_GRAMMAR)
+        val output = try {
+            val prompt = ConflictPrompt.buildDecision(
+                existing = existing,
+                newContent = newFact.content,
+                newCategory = newFact.category,
+                newImportance = newFact.importance,
+            )
+            val sb = StringBuilder()
+            engine.sendMessage(prompt, CONFLICT_DECISION_MAX_TOKENS).toList().forEach { sb.append(it) }
+            sb.toString().trim()
+        } finally {
+            engine.clearGrammar()
+        }
+        // Normalize — GBNF гарантирует ADD/UPDATE/NOOP, но если parsing был skipped
+        // (failed grammar — see Stage 6.1 fence-strip), нужен fallback
+        return when {
+            output.contains("UPDATE", ignoreCase = true) -> "UPDATE"
+            output.contains("NOOP", ignoreCase = true) -> "NOOP"
+            output.contains("ADD", ignoreCase = true) -> "ADD"
+            else -> {
+                Log.w(TAG, "ConflictDecision: unexpected output '$output' → defaulting to ADD")
+                "ADD"
+            }
+        }
+    }
+
+    /** Wrapper над FactsRepository.insertFact с composite embedding'ом уже посчитанным. */
+    private suspend fun insertNewFact(
+        fact: ExtractedFact,
+        embedding: FloatArray,
+        chatId: Long?,
+        sourceMessageId: Long?,
+    ): Long = FactsRepository.insertFact(
+        content = fact.content,
+        keywords = fact.keywords,
+        context = fact.context,
+        category = fact.category,
+        importance = fact.importance,
+        embedding = embedding,
+        chatId = chatId,
+        sourceMessageId = sourceMessageId,
+        eventDate = fact.eventDate,
+    )
 
     private fun buildSummaryText(
         userProfile: String,
