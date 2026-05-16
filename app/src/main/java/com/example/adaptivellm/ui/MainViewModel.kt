@@ -64,6 +64,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val MIN_RAM_FOR_VULKAN_MB = 8_000L
 
         /**
+         * Временно форсим CPU для всех устройств. Причины (2026-05-16):
+         *   - llama.cpp Vulkan backend не поддерживает state_seq_save_file для
+         *     Qwen3.5 hybrid (M-RoPE + DeltaNet/SSM). Persist save ~26 сек +
+         *     corrupt KV при offload_kqv=false → fallback на полный re-decode
+         *     при каждом chat re-entry (Strategy B, 5-30 сек на Pixel 9).
+         *   - Eviction prefill длинных prompt'ов на Vulkan медленнее CPU за счёт
+         *     transfer overhead, plus известные anomalии 26-сек stall (см.
+         *     vulkan_kv_persist_research.md).
+         *
+         * Снимать когда: llama.cpp получит full hybrid model state persistence
+         * (M-RoPE seq_rm + SSM state в save_file path). Tracking — upstream issues.
+         */
+        private const val FORCE_CPU_ONLY = true
+
+        /**
          * Максимум одновременных чатов. Лимит готовит почву под Stage 4+
          * KV cache persistence — каждый чат будет хранить kv_cache.bin размером
          * ~100-200 MB (см. ChatRepository / architecture.md). При >10 чатах
@@ -93,119 +108,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Абсолютный путь к temp файлу persist test'а (Stage 2). */
     private val persistTestPath: String
         get() = File(getApplication<Application>().filesDir, PERSIST_TEST_FILE).absolutePath
-
-    /**
-     * Smoke test для retrieval pipeline (Stage 3.2). Вставляет 5 sample фактов
-     * (по одному на категорию) с embedding'ами и прогоняет несколько queries,
-     * логируя top-K + score breakdown. Запускается ТОЛЬКО если facts табл.
-     * пустая — чтобы повторные запуски приложения не плодили дубликаты.
-     *
-     * Результат — в logcat (`RetrievalEngine` + `MainViewModel`). UI не трогаем,
-     * пока нет dev panel (Stage 3.3).
-     */
-    private suspend fun runRetrievalSmokeTest() {
-        try {
-            // Ensure DB is ready — embedding init и DB init запускаются в parallel,
-            // у retrieval нет гарантии что DB уже initialized. Вызов идемпотентен:
-            // если init завершен — мгновенный return, иначе ждём на dbDispatcher.
-            MemoryDatabaseHelper.initialize(getApplication())
-            val existing = FactsRepository.countActive()
-            if (existing > 0) {
-                android.util.Log.i("MainViewModel",
-                    "Retrieval smoke test: $existing facts already in DB — skip seeding, run queries only")
-                runRetrievalSmokeQueries()
-                return
-            }
-            android.util.Log.i("MainViewModel", "Retrieval smoke test: seeding 5 sample facts...")
-
-            data class Seed(val content: String, val keywords: List<String>, val context: String,
-                            val category: String, val importance: Int, val eventDate: Long? = null)
-
-            val seeds = listOf(
-                Seed("Пользователь любит играть в шахматы",
-                     listOf("шахматы", "хобби", "игра"),
-                     "Регулярно играет онлайн на досуге",
-                     "preference", 6),
-                Seed("Изучает Kotlin для дипломного Android-проекта",
-                     listOf("kotlin", "диплом", "android", "программирование"),
-                     "Стек: Compose, llama.cpp, on-device LLM",
-                     "goal", 8),
-                Seed("Живёт в Москве",
-                     listOf("москва", "город", "местоположение"),
-                     "Постоянное место жительства",
-                     "personal_info", 7),
-                Seed("Отвечать кратко, без лишних формальностей",
-                     listOf("краткость", "стиль", "общение"),
-                     "Предпочитаемый стиль общения ассистента",
-                     "instruction", 9),
-                Seed("Защита диплома 22 мая 2026",
-                     listOf("защита", "диплом", "дедлайн", "май"),
-                     "Финальная защита бакалаврской работы",
-                     "event", 9, eventDate = 1748908800L),  // 2026-06-03 ~ запас
-            )
-            for (s in seeds) {
-                val emb = EmbeddingModel.encode("${s.content}. Keywords: ${s.keywords.joinToString(", ")}. Context: ${s.context}")
-                FactsRepository.insertFact(
-                    content = s.content,
-                    keywords = s.keywords,
-                    context = s.context,
-                    category = s.category,
-                    importance = s.importance,
-                    embedding = emb,
-                    eventDate = s.eventDate,
-                )
-            }
-
-            runRetrievalSmokeQueries()
-        } catch (e: Exception) {
-            android.util.Log.e("MainViewModel", "Retrieval smoke test failed", e)
-        }
-    }
-
-    /** Прогоняет 3 sample queries и логирует результаты с breakdown'ом. */
-    private suspend fun runRetrievalSmokeQueries() {
-        val queries = listOf(
-            "что я люблю делать в свободное время?",
-            "когда у меня важное событие?",
-            "что ты знаешь о моём городе?",
-        )
-        for (q in queries) {
-            val results = RetrievalEngine.retrieveFacts(q, currentChatId = null, topK = 5)
-            val breakdown = results.joinToString("\n  ") { sf ->
-                "[%.3f] (rel=%.2f rec=%.2f imp=%.2f rrf=%.4f) %s: %s".format(
-                    sf.score, sf.relevance, sf.recency, sf.importanceNorm, sf.rrfScore,
-                    sf.fact.category, sf.fact.content)
-            }
-            android.util.Log.i("MainViewModel",
-                "Query: \"$q\"\n  ${results.size} results:\n  $breakdown")
-        }
-    }
-
-    /**
-     * Smoke test для [EmbeddingModel] (Stage 3.1) — кодит 3 предложения,
-     * считает cosine similarity между парами. Близкие по смыслу должны иметь
-     * cosine ~0.7-0.95, далёкие ~0.3-0.5. Результат только в логах, не влияет
-     * на app flow.
-     */
-    private fun runEmbeddingSmokeTest() {
-        if (!EmbeddingModel.isInitialized) return
-        try {
-            val t0 = System.currentTimeMillis()
-            val a = EmbeddingModel.encode("Я люблю программировать на Kotlin")
-            val b = EmbeddingModel.encode("Мне нравится писать код на Kotlin")
-            val c = EmbeddingModel.encode("Сегодня хорошая погода, можно гулять")
-            val tEnc = System.currentTimeMillis() - t0
-            val ab = EmbeddingModel.cosineSimilarity(a, b)
-            val ac = EmbeddingModel.cosineSimilarity(a, c)
-            val bc = EmbeddingModel.cosineSimilarity(b, c)
-            android.util.Log.i("MainViewModel",
-                "EmbeddingModel smoke test: 3 encodes in ${tEnc}ms (~${tEnc / 3}ms each); " +
-                "cos(близкие)=$ab, cos(далёкие1)=$ac, cos(далёкие2)=$bc " +
-                "(ожидаем ab > ac, ab > bc)")
-        } catch (e: Exception) {
-            android.util.Log.e("MainViewModel", "Embedding smoke test failed", e)
-        }
-    }
 
     /**
      * SharedPreferences-кэш для результата persist test'а. Ключ включает модель
@@ -474,10 +376,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 EmbeddingModel.initialize(application)
-                runEmbeddingSmokeTest()
-                // Stage 3.2 — retrieval pipeline smoke test (запустится только если
-                // facts таблица пустая, чтобы не плодить дубликаты при каждом старте)
-                runRetrievalSmokeTest()
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "EmbeddingModel init failed — retrieval disabled", e)
             }
@@ -596,6 +494,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun shouldUseVulkan(): Boolean {
+        if (FORCE_CPU_ONLY) return false  // см. описание FORCE_CPU_ONLY выше
         if (!deviceProfile.hasVulkan) return false
         if (deviceProfile.totalRamMb < MIN_RAM_FOR_VULKAN_MB) return false
         // Check if Vulkan crashed on a previous launch
@@ -953,15 +852,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private suspend fun maybeRunEviction(chatId: Long) {
         if (engine.state.value !is InferenceEngine.State.ModelLoaded) return
-        // Проверка T_max — дешёвая, не блокируем UI пока не уверены что eviction нужна
-        val tMax = EvictionEngine.tMaxFor(deviceProfile.ramTier)
+        // Проверка T_max — дешёвая, не блокируем UI пока не уверены что eviction нужна.
+        // Прогрессивный T_max зависит от merge_count → читаем summary один раз.
+        val mergeCount = ChatRepository.getSummary(chatId)?.mergeCount ?: 0
+        val tMax = EvictionEngine.effectiveTMaxFor(deviceProfile.ramTier, mergeCount)
         val currentPos = engine.getCurrentPos()
         if (currentPos < tMax) return
         // Strategy B (Vulkan) не имеет snapshot_base → setSystemPrompt fallback внутри
         // EvictionEngine.runEvictionInternal сам справится через snapshotBase.load()
         // возврат false.
         _isEvicting.value = true
-        _evictionStatus.value = "Сжатие истории чата..."
+        _evictionStatus.value = if (mergeCount == 0) "Создание профиля памяти..."
+                                else "Сжатие истории чата..."
         try {
             EvictionEngine.checkAndRun(
                 chatId = chatId,
@@ -1182,17 +1084,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // делать в любой момент после loadModel. Concat'им post-anchor сообщения
             // в одну строку и tokenize'им за один native call (~10-30 мс на десятки
             // сообщений).
+            val preEvictionMergeCount = ChatRepository.getSummary(chatId)?.mergeCount ?: 0
             val needPreEviction = run {
                 if (kvCacheLoaded) return@run false  // KV state уже валидный (post-eviction)
                 if (messagesToReplay.isEmpty()) return@run false
-                val tMax = EvictionEngine.tMaxFor(deviceProfile.ramTier)
+                val tMax = EvictionEngine.effectiveTMaxFor(deviceProfile.ramTier, preEvictionMergeCount)
                 val concat = messagesToReplay.joinToString("\n") { it.content }
                 val replayTokens = engine.tokenize(concat)
                 val projected = _systemPromptTokens + replayTokens
                 val needEv = projected > tMax
                 android.util.Log.i("MainViewModel",
                     "Pre-replay token budget: system=$_systemPromptTokens + replay=$replayTokens " +
-                    "= $projected vs T_max=$tMax → eviction ${if (needEv) "NEEDED" else "not needed"}")
+                    "= $projected vs T_max=$tMax (mergeCount=$preEvictionMergeCount) " +
+                    "→ eviction ${if (needEv) "NEEDED" else "not needed"}")
                 needEv
             }
 
@@ -1201,7 +1105,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // do its own [system_only] reset (via snapshot_base or setSystemPrompt)
                 // and re-decode summary + last-N at the end.
                 _isEvicting.value = true
-                _evictionStatus.value = "Сжатие истории чата..."
+                _evictionStatus.value = if (preEvictionMergeCount == 0) "Создание профиля памяти..."
+                                        else "Сжатие истории чата..."
                 try {
                     EvictionEngine.runEviction(
                         chatId = chatId,

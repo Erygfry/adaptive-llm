@@ -34,7 +34,10 @@ object EvictionEngine {
 
     private const val TAG = "EvictionEngine"
 
-    /** Триггер eviction: trigger когда сумма KV > T_max */
+    /**
+     * Steady-state T_max после warm-up (architecture.md § Параметры по группам).
+     * Используется в [effectiveTMaxFor] как верхняя граница.
+     */
     fun tMaxFor(tier: RamTier): Int = when (tier) {
         RamTier.HIGH ->  14000
         RamTier.UPPER_MID -> 6000
@@ -42,12 +45,31 @@ object EvictionEngine {
         RamTier.LOW, RamTier.VERY_LOW -> 4000
     }
 
-    /** Target размер KV после eviction (architecture.md) */
-    private fun tRetainedFor(tier: RamTier): Int = when (tier) {
-        RamTier.HIGH -> 8000
-        RamTier.UPPER_MID -> 3500
-        RamTier.MID -> 2400
-        RamTier.LOW, RamTier.VERY_LOW -> 2400
+    /**
+     * Прогрессивный T_max: первые evictions триггерятся при меньшем пороге,
+     * чтобы первый eviction'ы были короче (меньше evicted block → быстрее
+     * extraction prefill). После N evictions выходим на полный [tMaxFor].
+     *
+     * Параметры подобраны так чтобы warm-up занимал 2 (MID/UPPER_MID) или 4
+     * (HIGH) eviction'а — после этого устаканиваемся.
+     *
+     *   MID:        2500 → 3250 → 4000   (step 750)
+     *   UPPER_MID:  3000 → 4500 → 6000   (step 1500)
+     *   HIGH:       5000 → 7250 → 9500 → 11750 → 14000  (step 2250)
+     *
+     * Стартовый порог 2500 для MID — минимум жизнеспособного: summary cap (500)
+     * + 3 × avg message (300) + system (~100) + new turn reserve (~600) ≈ 2100,
+     * с запасом 400 на jitter длин сообщений.
+     */
+    fun effectiveTMaxFor(tier: RamTier, mergeCount: Int): Int {
+        val (start, step) = when (tier) {
+            RamTier.HIGH -> 5000 to 2250
+            RamTier.UPPER_MID -> 3000 to 1500
+            RamTier.MID -> 2500 to 750
+            RamTier.LOW, RamTier.VERY_LOW -> 2500 to 750
+        }
+        val max = tMaxFor(tier)
+        return minOf(max, start + step * mergeCount.coerceAtLeast(0))
     }
 
     /** Token budget для summary (target после extraction'а) */
@@ -58,21 +80,36 @@ object EvictionEngine {
         RamTier.LOW, RamTier.VERY_LOW -> 500
     }
 
-    /** Сколько последних сообщений оставлять в KV после eviction */
-    private fun lastNFor(tier: RamTier): Int = when (tier) {
+    /**
+     * Верхний cap на число последних сообщений в KV после eviction. Фактический
+     * keep-N считается token-budget'ом в [pickKeptCount]; этот cap нужен чтобы
+     * на длинных диалогах с короткими сообщениями не оставлять слишком много
+     * (KV предсказуемый, retrieval остаётся основным источником контекста).
+     */
+    private fun lastNCapFor(tier: RamTier): Int = when (tier) {
         RamTier.HIGH -> 8
         RamTier.UPPER_MID -> 6
         RamTier.MID -> 4
         RamTier.LOW, RamTier.VERY_LOW -> 4
     }
 
+    /** Приближение размера системного блока (snapshot_base ~50 токенов + запас). */
+    private const val SYSTEM_TOKENS_APPROX = 100
+
+    /**
+     * Резерв в token budget'е под следующий ход: новый user prompt + retrieved
+     * memories + начало генерации. Без этого резерва post-eviction KV впритык
+     * к T_max → следующий же turn триггерит новый eviction.
+     */
+    private const val NEW_TURN_RESERVE = 600
+
     /** Лимит output токенов на extraction LLM call. Summary (~500) + facts (~10×80) + JSON overhead. */
     private const val EXTRACTION_MAX_TOKENS = 2048
 
     /**
      * Архитектурный минимум last-N (architecture.md § Минимум сообщений в контексте).
-     * Используется в overflow case (Шаг 4.3) когда tier last-N не помещается в
-     * T_retained budget — сокращаем до этого минимума.
+     * [pickKeptCount] гарантирует keep-N ≥ этого значения, даже если budget не
+     * позволяет — без минимума LLM теряет continuity и не понимает свежий контекст.
      */
     private const val MIN_LAST_N = 3
 
@@ -136,10 +173,12 @@ object EvictionEngine {
         onProgress: (String) -> Unit = {},
     ): Boolean {
         val currentKvTokens = engine.getCurrentPos()
-        val tMax = tMaxFor(ramTier)
+        val mergeCount = ChatRepository.getSummary(chatId)?.mergeCount ?: 0
+        val tMax = effectiveTMaxFor(ramTier, mergeCount)
         if (currentKvTokens < tMax) return false
 
-        Log.i(TAG, "Eviction triggered: chatId=$chatId, current_pos=$currentKvTokens, T_max=$tMax")
+        Log.i(TAG, "Eviction triggered: chatId=$chatId, current_pos=$currentKvTokens, " +
+                   "T_max=$tMax (mergeCount=$mergeCount)")
         return runEviction(chatId, engine, ramTier, systemPrompt, snapshotBase,
                            modelKey, nCtx, currentThinkingMode, onProgress)
     }
@@ -162,7 +201,10 @@ object EvictionEngine {
         currentThinkingMode: Int,
         onProgress: (String) -> Unit = {},
     ): Boolean {
-        onProgress("Анализ контекста...")
+        // NB: первый onProgress («Создание профиля памяти...» или «Сжатие
+        // истории чата...») выставляет MainViewModel ДО вызова — он знает
+        // mergeCount без лишнего DB read. Здесь не дублируем, чтобы не
+        // перебивать тот текст.
         ChatRepository.setEvictionState(chatId, "in_progress")
         try {
             runEvictionInternal(
@@ -194,33 +236,40 @@ object EvictionEngine {
         val summary = ChatRepository.getSummary(chatId)
             ?: error("No summary row for chatId=$chatId — Stage 1 createChat should have created it")
         val allInKv = ChatRepository.getMessagesAfter(chatId, summary.anchorMessageId)
-        val tierLastN = lastNFor(ramTier)
+        val effectiveTMax = effectiveTMaxFor(ramTier, summary.mergeCount)
+        val lastNCap = lastNCapFor(ramTier)
 
-        // Overflow handling (частичная импл Шага 4.3): мы попали сюда только если
-        // T_max превышен (checkAndRun уже проверил). Если messages ≤ tier last-N,
-        // обычная политика "сохранять last-N" заблокировала бы eviction. Architecture
-        // mandates минимум last-N = 3, поэтому в overflow case сокращаем до 3.
-        // В production T_max >> last-N, этот path активируется редко.
-        val effectiveLastN = if (allInKv.size <= tierLastN) MIN_LAST_N else tierLastN
+        // Token-budget-based keep-N: оставляем столько последних сообщений
+        // сколько влезает в (T_max - summary - system - new_turn_reserve), но не
+        // меньше MIN_LAST_N (architecture mandate) и не больше lastNCap (по тиру).
+        // Это адаптивно к длине сообщений и предотвращает thrashing когда T_max
+        // низкий (warm-up phase) или сообщения длинные.
+        val msgBudget = (effectiveTMax - summary.tokenCount - SYSTEM_TOKENS_APPROX - NEW_TURN_RESERVE)
+            .coerceAtLeast(0)
+        val effectiveLastN = pickKeptCount(allInKv, msgBudget, lastNCap)
+
         if (allInKv.size <= effectiveLastN) {
-            Log.i(TAG, "Skipping eviction: only ${allInKv.size} messages ≤ min last-N=$effectiveLastN")
+            Log.i(TAG, "Skipping eviction: budget keeps all ${allInKv.size} messages " +
+                       "(keepN=$effectiveLastN, msgBudget=$msgBudget, summary=${summary.tokenCount}, " +
+                       "T_max=$effectiveTMax)")
             ChatRepository.setEvictionState(chatId, "idle")
             return
-        }
-        if (effectiveLastN != tierLastN) {
-            Log.w(TAG, "Шаг 4.3 overflow: ${allInKv.size} messages ≤ tier last-N=$tierLastN, " +
-                       "reducing to min last-N=$effectiveLastN")
         }
 
         val evictedBlock = allInKv.dropLast(effectiveLastN)
         val keptLastN = allInKv.takeLast(effectiveLastN)
         val newAnchorId = evictedBlock.last().id
+        val keptTokens = keptLastN.sumOf { it.tokenCount.coerceAtLeast(0) }
 
         Log.i(TAG, "Шаг 4.1: evict ${evictedBlock.size} messages " +
-                   "(ids ${evictedBlock.first().id}..${newAnchorId}), keep last-${keptLastN.size}")
+                   "(ids ${evictedBlock.first().id}..${newAnchorId}), keep last-${keptLastN.size} " +
+                   "($keptTokens tokens, msgBudget=$msgBudget, T_max=$effectiveTMax, " +
+                   "mergeCount=${summary.mergeCount})")
 
         // ─── Этап B — switch context + extraction LLM call ───────────────
-        onProgress("Извлечение фактов и обновление сводки...")
+        val isFirstEviction = summary.mergeCount == 0
+        onProgress(if (isFirstEviction) "Анализ диалога и извлечение фактов..."
+                   else "Извлечение фактов и обновление сводки...")
 
         // B.1: snapshot_base restore → KV в state [system_only]. Если Strategy B
         // (Vulkan где snapshot_base не работает) — fall back на setSystemPrompt.
@@ -340,7 +389,7 @@ object EvictionEngine {
         // ─── Этап D — rebuild KV = [system + last-N messages] ───────────
         // Stage 6.1 упрощение: summary НЕ в system block. Stage 6.x optimization —
         // включать summary в system для cache_prompt стабильности.
-        onProgress("Восстановление контекста...")
+        onProgress(if (isFirstEviction) "Сохранение профиля..." else "Восстановление контекста...")
 
         val baseRebuilt = snapshotBase.load(engine, systemPrompt, modelKey, nCtx)
         if (!baseRebuilt) {
@@ -356,14 +405,50 @@ object EvictionEngine {
         }
 
         val finalPos = engine.getCurrentPos()
-        val tRetained = tRetainedFor(ramTier)
-        if (finalPos > tRetained) {
-            Log.w(TAG, "Этап D: post-eviction KV ($finalPos tokens) exceeds T_retained ($tRetained) — " +
-                       "next eviction may trigger sooner than expected")
+        // T_max для НЕХТА eviction'а — после увеличения merge_count в DB. Если
+        // finalPos уже близко к нему — следующий turn почти гарантированно
+        // триггернёт eviction повторно (thrashing indicator).
+        val nextTMax = effectiveTMaxFor(ramTier, summary.mergeCount + 1)
+        val thrashThreshold = (nextTMax * 0.85).toInt()
+        if (finalPos > thrashThreshold) {
+            Log.w(TAG, "Этап D: post-eviction KV ($finalPos tokens) > 85% of next T_max " +
+                       "($nextTMax) — next eviction may trigger soon (thrash indicator)")
         }
         Log.i(TAG, "Eviction complete: chatId=$chatId, evicted=${evictedBlock.size}, " +
                    "kept=${keptLastN.size}, facts +$insertedFacts/~$updatedFacts/=$skippedFacts " +
-                   "(added/updated/noop), final_kv=$finalPos")
+                   "(added/updated/noop), final_kv=$finalPos, next_T_max=$nextTMax")
+    }
+
+    /**
+     * Token-budget-based keep-N selection. Идёт с конца [allInKv], копит сумму
+     * token_count'ов, останавливается когда:
+     *   - набрали [MIN_LAST_N] И следующее сообщение выйдет за [msgBudget], ИЛИ
+     *   - набрали [lastNCap] (tier upper bound).
+     *
+     * Гарантия: возвращаемое значение ≥ min([MIN_LAST_N], [allInKv].size).
+     * MIN_LAST_N — архитектурный пол (architecture.md § Минимум сообщений), его
+     * соблюдаем даже если бюджет не позволяет — иначе теряется continuity и
+     * модель не понимает свежий контекст.
+     */
+    private fun pickKeptCount(
+        allInKv: List<ChatRepository.MessageRow>,
+        msgBudget: Int,
+        lastNCap: Int,
+    ): Int {
+        if (allInKv.size <= MIN_LAST_N) return allInKv.size
+        var keptTokens = 0
+        var keptCount = 0
+        for (msg in allInKv.asReversed()) {
+            val cnt = msg.tokenCount.coerceAtLeast(1)
+            val nextTokens = keptTokens + cnt
+            val nextCount = keptCount + 1
+            if (nextCount > lastNCap) break
+            val belowMin = nextCount <= MIN_LAST_N
+            if (!belowMin && nextTokens > msgBudget) break
+            keptTokens = nextTokens
+            keptCount = nextCount
+        }
+        return keptCount.coerceAtLeast(MIN_LAST_N).coerceAtMost(allInKv.size)
     }
 
     /** Распарсенный fact из extraction JSON (до conflict resolution). */
