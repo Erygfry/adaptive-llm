@@ -16,6 +16,7 @@ import com.example.adaptivellm.ui.AppScreen
 import com.example.adaptivellm.ui.ChatListScreen
 import com.example.adaptivellm.ui.ChatScreen
 import com.example.adaptivellm.ui.DownloadScreen
+import com.example.adaptivellm.ui.FactsMemoryScreen
 import com.example.adaptivellm.ui.MainViewModel
 import com.example.adaptivellm.ui.SetupScreen
 import com.example.adaptivellm.ui.theme.AdaptiveLLMTheme
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
                     is AppScreen.Download -> DownloadScreen(viewModel)
                     is AppScreen.ChatList -> ChatListScreen(viewModel)
                     is AppScreen.Chat -> ChatScreen(viewModel)
+                    is AppScreen.FactsMemory -> FactsMemoryScreen(viewModel)
                 }
             }
         }

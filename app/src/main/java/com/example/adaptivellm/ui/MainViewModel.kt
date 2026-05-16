@@ -47,6 +47,7 @@ sealed class AppScreen {
     data object Download : AppScreen()
     data object ChatList : AppScreen()
     data object Chat : AppScreen()
+    data object FactsMemory : AppScreen()
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -64,19 +65,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val MIN_RAM_FOR_VULKAN_MB = 8_000L
 
         /**
-         * Временно форсим CPU для всех устройств. Причины (2026-05-16):
-         *   - llama.cpp Vulkan backend не поддерживает state_seq_save_file для
-         *     Qwen3.5 hybrid (M-RoPE + DeltaNet/SSM). Persist save ~26 сек +
-         *     corrupt KV при offload_kqv=false → fallback на полный re-decode
-         *     при каждом chat re-entry (Strategy B, 5-30 сек на Pixel 9).
-         *   - Eviction prefill длинных prompt'ов на Vulkan медленнее CPU за счёт
-         *     transfer overhead, plus известные anomalии 26-сек stall (см.
-         *     vulkan_kv_persist_research.md).
+         * Force-CPU-only режим. Применяется когда Vulkan backend проблемный для
+         * текущей модели (см. vulkan_kv_persist_research.md).
          *
-         * Снимать когда: llama.cpp получит full hybrid model state persistence
-         * (M-RoPE seq_rm + SSM state в save_file path). Tracking — upstream issues.
+         * История переключений:
+         *   - 2026-05-16: включали из-за корраптящегося KV при offload_kqv=false
+         *     и медленного state_seq_save_file (~26s) для Qwen3.5 hybrid;
+         *   - 2026-05-16 (позже): отключили — на длинных prompt'ах CPU eviction
+         *     >25 мин делал UX непригодным, Vulkan re-decode (5-30 сек на чат
+         *     re-entry) — меньшее зло.
+         *
+         * Включить снова если: вернутся данные о Vulkan-крашах на конкретных
+         * устройствах. Тогда либо точечная блокировка через KEY_VULKAN_CRASHED,
+         * либо снова глобальный флаг.
          */
-        private const val FORCE_CPU_ONLY = true
+        private const val FORCE_CPU_ONLY = false
 
         /**
          * Максимум одновременных чатов. Лимит готовит почву под Stage 4+
@@ -314,6 +317,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _chats = MutableStateFlow<List<ChatRepository.ChatInfo>>(emptyList())
     val chats: StateFlow<List<ChatRepository.ChatInfo>> = _chats.asStateFlow()
 
+    // Stage 7 — Память (fact viewer). Загружается lazy при входе на экран.
+    private val _facts = MutableStateFlow<List<com.example.adaptivellm.storage.FactsRepository.Fact>>(emptyList())
+    val facts: StateFlow<List<com.example.adaptivellm.storage.FactsRepository.Fact>> = _facts.asStateFlow()
+
+    /** Текущий filter в Память screen — null = все категории. */
+    private val _factsCategoryFilter = MutableStateFlow<String?>(null)
+    val factsCategoryFilter: StateFlow<String?> = _factsCategoryFilter.asStateFlow()
+
+    private val _factsLoading = MutableStateFlow(false)
+    val factsLoading: StateFlow<Boolean> = _factsLoading.asStateFlow()
+
     private val _currentChatId = MutableStateFlow<Long?>(null)
     val currentChatId: StateFlow<Long?> = _currentChatId.asStateFlow()
 
@@ -331,6 +345,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val _isEvicting = MutableStateFlow(false)
     val isEvicting: StateFlow<Boolean> = _isEvicting.asStateFlow()
+
+    /**
+     * Linear progress 0..1 во время extraction LLM call'а (генерация JSON).
+     * null = indeterminate (prefill / conflict resolution / KV rebuild — фазы где
+     * мы не можем дать процентный прогноз). UI рисует LinearProgressIndicator
+     * в determinate vs indeterminate режиме соответственно.
+     */
+    private val _evictionProgress = MutableStateFlow<Float?>(null)
+    val evictionProgress: StateFlow<Float?> = _evictionProgress.asStateFlow()
 
     /** Подстатус для eviction UI («Анализ контекста...», «Восстановление...»). */
     private val _evictionStatus = MutableStateFlow("")
@@ -368,6 +391,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "MemoryDatabase init failed — memory features disabled", e)
             }
+        }
+
+        // Stage 7 — periodic cleanup для facts (architecture.md § Periodic cleanup).
+        // Регистрируется на каждом запуске приложения, но KEEP policy не
+        // дублирует уже запланированный job — повторные вызовы идемпотентны.
+        try {
+            com.example.adaptivellm.storage.FactCleanupWorker.schedule(application)
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "FactCleanupWorker scheduling failed", e)
         }
 
         // Initialize embedding model (Stage 3.1 — Phase 1 retrieval). Не блокирует
@@ -875,6 +907,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 nCtx = nCtx,
                 currentThinkingMode = _thinkingMode.value,
                 onProgress = { status -> _evictionStatus.value = status },
+                onTokenProgress = { p -> _evictionProgress.value = p },
             )
             // После eviction'а KV изменился — обновим totalTokens для UI
             _totalTokens.value = engine.getCurrentPos()
@@ -883,6 +916,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } finally {
             _isEvicting.value = false
             _evictionStatus.value = ""
+            _evictionProgress.value = null
         }
     }
 
@@ -1118,12 +1152,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         nCtx = nCtx,
                         currentThinkingMode = _thinkingMode.value,
                         onProgress = { status -> _evictionStatus.value = status },
+                        onTokenProgress = { p -> _evictionProgress.value = p },
                     )
                 } catch (e: Exception) {
                     android.util.Log.e("MainViewModel", "Pre-replay eviction failed", e)
                 } finally {
                     _isEvicting.value = false
                     _evictionStatus.value = ""
+                    _evictionProgress.value = null
                 }
             } else {
                 // Replay истории в KV (либо full если уровень 2/3, либо tail если уровень 1).
@@ -1234,6 +1270,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun navigateTo(screen: AppScreen) {
         _screen.value = screen
+    }
+
+    /**
+     * Stage 7 — открывает экран «Память». Сразу триггерит загрузку фактов
+     * с текущим фильтром (по умолчанию — все категории).
+     */
+    fun openFactsMemory() {
+        _screen.value = AppScreen.FactsMemory
+        refreshFacts()
+    }
+
+    /**
+     * Переключает фильтр по категории и подгружает соответствующие факты.
+     * @param category null = все, иначе одна из FactsRepository.CATEGORIES
+     */
+    fun setFactsFilter(category: String?) {
+        if (_factsCategoryFilter.value == category) return
+        _factsCategoryFilter.value = category
+        refreshFacts()
+    }
+
+    /** Подгружает факты из БД с учётом текущего filter'а. */
+    fun refreshFacts() {
+        viewModelScope.launch {
+            _factsLoading.value = true
+            try {
+                _facts.value = com.example.adaptivellm.storage.FactsRepository
+                    .getAllActive(category = _factsCategoryFilter.value)
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "refreshFacts failed", e)
+                _facts.value = emptyList()
+            } finally {
+                _factsLoading.value = false
+            }
+        }
     }
 
     override fun onCleared() {

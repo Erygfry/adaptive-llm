@@ -7,6 +7,7 @@ import com.example.adaptivellm.inference.InferenceEngine
 import com.example.adaptivellm.storage.ChatRepository
 import com.example.adaptivellm.storage.FactsRepository
 import com.example.adaptivellm.storage.SnapshotBaseManager
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import org.json.JSONObject
 import java.time.LocalDate
@@ -171,6 +172,7 @@ object EvictionEngine {
         nCtx: Int,
         currentThinkingMode: Int,
         onProgress: (String) -> Unit = {},
+        onTokenProgress: (Float?) -> Unit = {},
     ): Boolean {
         val currentKvTokens = engine.getCurrentPos()
         val mergeCount = ChatRepository.getSummary(chatId)?.mergeCount ?: 0
@@ -180,7 +182,7 @@ object EvictionEngine {
         Log.i(TAG, "Eviction triggered: chatId=$chatId, current_pos=$currentKvTokens, " +
                    "T_max=$tMax (mergeCount=$mergeCount)")
         return runEviction(chatId, engine, ramTier, systemPrompt, snapshotBase,
-                           modelKey, nCtx, currentThinkingMode, onProgress)
+                           modelKey, nCtx, currentThinkingMode, onProgress, onTokenProgress)
     }
 
     /**
@@ -200,6 +202,7 @@ object EvictionEngine {
         nCtx: Int,
         currentThinkingMode: Int,
         onProgress: (String) -> Unit = {},
+        onTokenProgress: (Float?) -> Unit = {},
     ): Boolean {
         // NB: первый onProgress («Создание профиля памяти...» или «Сжатие
         // истории чата...») выставляет MainViewModel ДО вызова — он знает
@@ -209,7 +212,7 @@ object EvictionEngine {
         try {
             runEvictionInternal(
                 chatId, engine, ramTier, systemPrompt, snapshotBase,
-                modelKey, nCtx, currentThinkingMode, onProgress,
+                modelKey, nCtx, currentThinkingMode, onProgress, onTokenProgress,
             )
             return true
         } catch (e: Exception) {
@@ -217,6 +220,7 @@ object EvictionEngine {
             try { ChatRepository.setEvictionState(chatId, "idle") } catch (_: Exception) {}
             try { engine.clearGrammar() } catch (_: Exception) {}
             try { engine.setThinkingMode(currentThinkingMode) } catch (_: Exception) {}
+            try { onTokenProgress(null) } catch (_: Exception) {}
             return false
         }
     }
@@ -231,6 +235,7 @@ object EvictionEngine {
         nCtx: Int,
         currentThinkingMode: Int,
         onProgress: (String) -> Unit,
+        onTokenProgress: (Float?) -> Unit,
     ) {
         // ─── Шаг 4.1 — определение evicted блока ─────────────────────────
         val summary = ChatRepository.getSummary(chatId)
@@ -298,12 +303,22 @@ object EvictionEngine {
             // GBNF JSON constraint только на extraction call'е, у conflict
             // resolution свои отдельные grammar'ы (DECISION / INSTRUCTION_GRAMMAR).
             engine.setGrammar(ExtractionGbnf.GRAMMAR)
+            // Token progress: до первого emit'а prefill в процессе (indeterminate),
+            // дальше — % от EXTRACTION_MAX_TOKENS. После завершения возвращаем null
+            // (последующие фазы — conflict resolution / KV rebuild — индетерминантны).
+            onTokenProgress(null)
             val rawOutput: String = try {
                 val sb = StringBuilder()
-                engine.sendMessage(extractionPrompt, EXTRACTION_MAX_TOKENS).toList().forEach { sb.append(it) }
+                var tokenCount = 0
+                engine.sendMessage(extractionPrompt, EXTRACTION_MAX_TOKENS).collect { chunk ->
+                    sb.append(chunk)
+                    tokenCount++
+                    onTokenProgress(tokenCount.toFloat() / EXTRACTION_MAX_TOKENS)
+                }
                 sb.toString()
             } finally {
                 engine.clearGrammar()
+                onTokenProgress(null)
             }
             Log.i(TAG, "Шаг 4.2: extraction output ${rawOutput.length} chars")
 
@@ -554,7 +569,7 @@ object EvictionEngine {
 
         if (highSimilar.isEmpty()) {
             // No conflict — ADD direct
-            insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+            insertNewFact(fact, embedding, chatId = chatId, sourceMessageId = sourceMessageId)
             return ResolveResult.ADDED
         }
 
@@ -571,7 +586,7 @@ object EvictionEngine {
                        "(cos=${"%.3f".format(cosine)}) → $decision")
             when (decision) {
                 "UPDATE" -> {
-                    val newId = insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+                    val newId = insertNewFact(fact, embedding, chatId = chatId, sourceMessageId = sourceMessageId)
                     FactsRepository.invalidateFact(existing.id, supersededBy = newId)
                     return ResolveResult.UPDATED
                 }
@@ -586,7 +601,7 @@ object EvictionEngine {
         }
         // Все decisions = ADD (или пустые) → добавляем новый факт
         if (!sawNoopOrUpdate) {
-            insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+            insertNewFact(fact, embedding, chatId = chatId, sourceMessageId = sourceMessageId)
             return ResolveResult.ADDED
         }
         return ResolveResult.NOOP  // unreachable но defensive
@@ -606,9 +621,13 @@ object EvictionEngine {
         nCtx: Int,
         sourceMessageId: Long?,
     ): ResolveResult {
+        // Conflict check: смотрим на все активные instructions (cross-chat) —
+        // если в чате A сказали «отвечай кратко», а сейчас в чате B говорят
+        // «отвечай длинно», это всё ещё conflict, хоть и в разных origin'ах.
+        // Но новая instruction всегда сохраняется с chat_id = текущий (Stage 7).
         val activeInstructions = FactsRepository.getActiveInstructions(chatId = null)
         if (activeInstructions.isEmpty()) {
-            insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+            insertNewFact(fact, embedding, chatId = chatId, sourceMessageId = sourceMessageId)
             return ResolveResult.ADDED
         }
 
@@ -629,7 +648,7 @@ object EvictionEngine {
                    "active=${activeInstructions.size}, decision='$output'")
 
         if (output == "none" || output.isBlank()) {
-            insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+            insertNewFact(fact, embedding, chatId = chatId, sourceMessageId = sourceMessageId)
             return ResolveResult.ADDED
         }
         val supersededId = output.toLongOrNull()
@@ -638,11 +657,11 @@ object EvictionEngine {
             // LLM выдала id'шник которого нет в active list (hallucination) →
             // defensive: просто insert новый
             Log.w(TAG, "InstructionConflict: LLM returned id=$output not in active list — just adding")
-            insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+            insertNewFact(fact, embedding, chatId = chatId, sourceMessageId = sourceMessageId)
             return ResolveResult.ADDED
         }
 
-        val newId = insertNewFact(fact, embedding, chatId = null, sourceMessageId = sourceMessageId)
+        val newId = insertNewFact(fact, embedding, chatId = chatId, sourceMessageId = sourceMessageId)
         FactsRepository.invalidateFact(target.id, supersededBy = newId)
         return ResolveResult.UPDATED
     }

@@ -197,24 +197,23 @@ object FactsRepository {
      * FTS5 BM25 search по content/keywords/context. Возвращает (fact_id, bm25_rank).
      * Меньший ранк = более релевантно (BM25 negate convention в SQLite FTS5).
      *
-     * Фильтрует невалидированные факты через JOIN с `facts` (valid_to IS NULL)
-     * и chat scope.
+     * **Семантика chat_id (Stage 7):** chat_id трактуется как **origin** факта,
+     * не как scope. Поэтому возвращаем все валидные факты со всех чатов;
+     * tier-priority по origin делается в [RetrievalEngine] после scoring'а.
+     * Параметр chatId оставлен в сигнатуре для будущей фильтрации (например
+     * privacy mode), сейчас не используется.
      *
      * @param query текст запроса — должен быть FTS5-safe (escape кавычек выполнен внутри)
      * @param k максимум кандидатов вернуть (top-K по BM25)
-     * @param chatId фильтр scope — null = только глобальные, иначе глобальные + локальные данного chatа
+     * @param chatId currently unused — см. описание семантики выше
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun searchFTS5(
         query: String,
         k: Int,
         chatId: Long?,
     ): List<Pair<Long, Float>> = withContext(MemoryDatabaseHelper.dbDispatcher) {
         val db = MemoryDatabaseHelper.database()
-        val chatFilter = if (chatId == null) {
-            "f.chat_id IS NULL"
-        } else {
-            "(f.chat_id IS NULL OR f.chat_id = $chatId)"
-        }
         // FTS5 trigram tokenizer treats the index as 3-char substrings.
         // MATCH 'люблю' = `LIKE %люблю%` — точная подстрока, не помогает с
         // морфологией ("люблю" не подстрока "любит"). Хитрость: декомпозируем
@@ -244,7 +243,6 @@ object FactsRepository {
             "WHERE facts_fts MATCH '$escapedFtsQuery' " +
             "  AND f.valid_to IS NULL " +
             "  AND f.category != 'instruction' " +
-            "  AND $chatFilter " +
             "ORDER BY score LIMIT $k;"
         )
         if (json.startsWith("ERROR")) {
@@ -262,9 +260,19 @@ object FactsRepository {
      * sqlite-vec KNN search по embedding. Возвращает (fact_id, distance).
      * Меньший distance = ближе по L2 (для unit-norm векторов — больше cosine).
      *
-     * Фильтрация по valid_to внутри vec0 partition (column валидирована при INSERT).
-     * Фильтрация по chat scope — JOIN с facts (vec0 не хранит chat_id).
+     * **Семантика chat_id (Stage 7):** chat_id трактуется как **origin** факта,
+     * не как scope. Возвращаем все валидные факты со всех чатов; tier-priority
+     * по origin делается в [RetrievalEngine] после scoring'а. Также используется
+     * conflict resolution в EvictionEngine — cross-chat dedup корректно работает
+     * только если поиск видит ВСЕ факты.
+     *
+     * Фильтрация по valid_to: trigger facts_invalidate удаляет row из facts_vec
+     * при UPDATE facts.valid_to (см. 001_init.sql). Дополнительный safety filter
+     * через JOIN (на случай рассинхрона).
+     *
+     * @param chatId currently unused — см. описание семантики выше
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun searchVec(
         embedding: FloatArray,
         k: Int,
@@ -273,16 +281,7 @@ object FactsRepository {
         require(embedding.size == 384) { "embedding must be 384-dim, got ${embedding.size}" }
         val db = MemoryDatabaseHelper.database()
         val embJson = embeddingToJson(embedding)
-        val chatFilter = if (chatId == null) {
-            "f.chat_id IS NULL"
-        } else {
-            "(f.chat_id IS NULL OR f.chat_id = $chatId)"
-        }
         // sqlite-vec syntax: WHERE embedding MATCH '...' AND k = N.
-        // valid_to не фильтруем — trigger facts_invalidate удалит row из
-        // facts_vec при UPDATE facts.valid_to (см. 001_init.sql). То есть в
-        // facts_vec автоматически живут ТОЛЬКО валидные факты. Дополнительный
-        // safety filter — f.valid_to IS NULL через JOIN (на случай рассинхрона).
         // Architecture-aligned: instructions подгружаются отдельно в Step 1.3,
         // в semantic retrieval не участвуют.
         val json = db.queryToJson(
@@ -292,7 +291,6 @@ object FactsRepository {
             "  AND v.k = $k " +
             "  AND f.valid_to IS NULL " +
             "  AND f.category != 'instruction' " +
-            "  AND $chatFilter " +
             "ORDER BY v.distance;"
         )
         if (json.startsWith("ERROR")) error("searchVec failed: $json")
@@ -320,6 +318,32 @@ object FactsRepository {
             check(rc == MemoryDatabase.SQLITE_OK) { "reinforce failed: ${db.lastError()}" }
         }
 
+    /**
+     * Все активные факты (valid_to IS NULL) для просмотра в UI «Память».
+     * Не используется в retrieval — там hybrid search через FTS+vec.
+     *
+     * @param category если задан — фильтр по конкретной категории
+     * @param limit защитный лимит (обычно фактов мало, но на длинной истории
+     *              чата может быть много). Default 500 покрывает реалистичный
+     *              max до того как periodic cleanup начнёт инвалидировать старые.
+     */
+    suspend fun getAllActive(
+        category: String? = null,
+        limit: Int = 500,
+    ): List<Fact> = withContext(MemoryDatabaseHelper.dbDispatcher) {
+        val db = MemoryDatabaseHelper.database()
+        val categoryFilter = if (category == null) ""
+                             else " AND category = '${escape(category)}'"
+        val json = db.queryToJson(
+            "SELECT * FROM facts " +
+            "WHERE valid_to IS NULL$categoryFilter " +
+            "ORDER BY created_at DESC LIMIT $limit;"
+        )
+        if (json.startsWith("ERROR")) error("getAllActive failed: $json")
+        val arr = JSONArray(json)
+        List(arr.length()) { parseFact(arr.getJSONObject(it)) }
+    }
+
     /** Количество активных фактов (для UI / debug). */
     suspend fun countActive(chatId: Long? = null): Int = withContext(MemoryDatabaseHelper.dbDispatcher) {
         val db = MemoryDatabaseHelper.database()
@@ -330,6 +354,92 @@ object FactsRepository {
         )
         if (json.startsWith("ERROR")) error("countActive failed: $json")
         JSONArray(json).getJSONObject(0).getInt("n")
+    }
+
+    /**
+     * Результат periodic cleanup'а — по сколько фактов инвалидировано по каждому
+     * правилу. Используется в WorkManager logging'е.
+     */
+    data class CleanupStats(
+        val rule1: Int,  // low importance + never accessed + old
+        val rule2: Int,  // medium-low importance + rarely accessed + idle
+        val rule3: Int,  // not very important + idle very long
+        val rule4: Int,  // expired events
+    ) {
+        val total: Int get() = rule1 + rule2 + rule3 + rule4
+    }
+
+    /**
+     * Periodic cleanup (Stage 7 — architecture.md § Periodic cleanup). Инвалидирует
+     * факты по 4 правилам:
+     *   1. importance ≤ 3 + access_count=0 + created > 30 дней назад
+     *   2. importance ≤ 5 + access_count ≤ 2 + idle > 90 дней
+     *   3. importance < 8 + idle > 6 месяцев (~180 дней)
+     *   4. category='event' + event_date < now - 30 дней (просроченные события)
+     *
+     * idle = now - COALESCE(last_access, created_at).
+     *
+     * Каждое правило — отдельный UPDATE в одной транзакции. Trigger
+     * facts_invalidate каскадно удаляет embedding'и из facts_vec.
+     *
+     * Не запускается из UI-флоу — вызывается WorkManager'ом (раз в сутки).
+     */
+    suspend fun invalidateExpired(now: Long = nowSec()): CleanupStats =
+        withContext(MemoryDatabaseHelper.dbDispatcher) {
+            val db = MemoryDatabaseHelper.database()
+            val day = 86_400L
+            val cutoff30  = now - 30L  * day
+            val cutoff90  = now - 90L  * day
+            val cutoff180 = now - 180L * day
+
+            var n1 = 0; var n2 = 0; var n3 = 0; var n4 = 0
+            db.inTransaction {
+                // Rule 1: trash facts (low importance, never accessed, old)
+                val rc1 = db.exec(
+                    "UPDATE facts SET valid_to = $now WHERE valid_to IS NULL " +
+                    "AND importance <= 3 AND access_count = 0 AND created_at < $cutoff30;"
+                )
+                check(rc1 == MemoryDatabase.SQLITE_OK) { "rule1 cleanup failed: ${db.lastError()}" }
+                n1 = readChanges(db)
+
+                // Rule 2: low-priority idle
+                val rc2 = db.exec(
+                    "UPDATE facts SET valid_to = $now WHERE valid_to IS NULL " +
+                    "AND importance <= 5 AND access_count <= 2 " +
+                    "AND COALESCE(last_access, created_at) < $cutoff90;"
+                )
+                check(rc2 == MemoryDatabase.SQLITE_OK) { "rule2 cleanup failed: ${db.lastError()}" }
+                n2 = readChanges(db)
+
+                // Rule 3: medium-priority very idle (semi-permanent only выживают)
+                val rc3 = db.exec(
+                    "UPDATE facts SET valid_to = $now WHERE valid_to IS NULL " +
+                    "AND importance < 8 " +
+                    "AND COALESCE(last_access, created_at) < $cutoff180;"
+                )
+                check(rc3 == MemoryDatabase.SQLITE_OK) { "rule3 cleanup failed: ${db.lastError()}" }
+                n3 = readChanges(db)
+
+                // Rule 4: expired events
+                val rc4 = db.exec(
+                    "UPDATE facts SET valid_to = $now WHERE valid_to IS NULL " +
+                    "AND category = 'event' AND event_date IS NOT NULL " +
+                    "AND event_date < $cutoff30;"
+                )
+                check(rc4 == MemoryDatabase.SQLITE_OK) { "rule4 cleanup failed: ${db.lastError()}" }
+                n4 = readChanges(db)
+            }
+            val stats = CleanupStats(n1, n2, n3, n4)
+            Log.i(TAG, "invalidateExpired: rule1=$n1, rule2=$n2, rule3=$n3, rule4=$n4 " +
+                       "(total=${stats.total} invalidated)")
+            stats
+        }
+
+    /** Helper — читает sqlite3_changes() через `SELECT changes()`. */
+    private fun readChanges(db: MemoryDatabase): Int {
+        val json = db.queryToJson("SELECT changes() AS n;")
+        if (json.startsWith("ERROR")) return 0
+        return JSONArray(json).getJSONObject(0).getInt("n")
     }
 
     /** Удаляет ВСЕ факты (используется в test/dev cleanup). НЕ для production. */

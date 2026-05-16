@@ -71,6 +71,7 @@ fun ChatScreen(viewModel: MainViewModel) {
     val isSwitchingChat by viewModel.isSwitchingChat.collectAsState()
     val isEvicting by viewModel.isEvicting.collectAsState()
     val evictionStatus by viewModel.evictionStatus.collectAsState()
+    val evictionProgress by viewModel.evictionProgress.collectAsState()
     val tps by viewModel.tokensPerSecond.collectAsState()
     val backend by viewModel.backendInfo.collectAsState()
     val engineState by viewModel.engine.state.collectAsState()
@@ -181,6 +182,20 @@ fun ChatScreen(viewModel: MainViewModel) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        if (isEvicting) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            val p = evictionProgress
+                            if (p != null) {
+                                LinearProgressIndicator(
+                                    progress = { p.coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                                )
+                            } else {
+                                LinearProgressIndicator(
+                                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                                )
+                            }
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

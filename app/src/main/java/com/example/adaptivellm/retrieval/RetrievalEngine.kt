@@ -26,7 +26,19 @@ object RetrievalEngine {
     /** Параметры RRF / scoring — захардкожено по architecture.md § Фаза 1. */
     private const val SEARCH_K = 20         // top-K из каждого поиска (FTS5 + vec) до merge
     private const val RRF_K = 60            // RRF параметр сглаживания (стандарт)
-    private const val SCORE_THRESHOLD = 0.3f // если top-1 ниже — возвращаем пусто
+
+    /**
+     * Per-fact composite threshold (Stage 7 — отступление от arch.md all-or-none).
+     *
+     * Старая логика: top-1 ≥ 0.3 → возвращаем ВСЕ top-K (включая weak match'и).
+     * Новая: каждый факт проходит фильтр composite ≥ этого значения индивидуально.
+     *
+     * Почему 0.5: composite = 0.4·rel + 0.35·rec + 0.25·imp. Свежий факт даёт
+     * baseline recency ≈ 0.35. Чтобы пробиться через 0.5, нужен хоть какой-то
+     * вклад от relevance/importance — отсекает «случайные fresh-но-нерелевантные»
+     * факты, не теряя topical hits.
+     */
+    private const val PER_FACT_THRESHOLD = 0.5f
 
     // Веса triple scoring (architecture: 0.4 / 0.35 / 0.25)
     private const val W_RELEVANCE = 0.4f
@@ -67,8 +79,9 @@ object RetrievalEngine {
      *   4. Fetch full Fact metadata batch
      *   5. Compute cosines для vec-hits (для FTS-only relevance=0)
      *   6. Triple scoring + sort desc
-     *   7. Threshold filter (top-1 < 0.3 → return empty)
-     *   8. Top-K + reinforcement (UPDATE access_count, last_access)
+     *   7. Per-fact threshold filter (composite ≥ 0.5)
+     *   8. Tier-priority: local-chat facts first, cross-chat filler в хвост
+     *   9. Top-K + reinforcement (UPDATE access_count, last_access)
      *
      * @param query пользовательское сообщение / поисковая фраза
      * @param currentChatId scope для локальных фактов; null = только глобальные
@@ -132,19 +145,36 @@ object RetrievalEngine {
             )
         }.sortedByDescending { it.score }
 
-        // 7. Threshold filter
-        if (scored.isEmpty() || scored[0].score < SCORE_THRESHOLD) {
-            Log.i(TAG, "retrieveFacts: top-1 score=${scored.firstOrNull()?.score} " +
-                       "< threshold=$SCORE_THRESHOLD → return empty")
+        // 7. Per-fact threshold filter (Stage 7): каждый факт фильтруется
+        // индивидуально, не all-or-none. Свежие но weak-relevance факты
+        // (например importance=10 событие из другой темы) отсекаются здесь.
+        val passing = scored.filter { it.score >= PER_FACT_THRESHOLD }
+        if (passing.isEmpty()) {
+            Log.i(TAG, "retrieveFacts: no facts passed threshold ${PER_FACT_THRESHOLD} " +
+                       "(top score=${scored.firstOrNull()?.score}) → return empty")
             return emptyList()
         }
 
-        // 8. Top-K + reinforcement
-        val topResults = scored.take(topK)
+        // 8. Tier-priority (Stage 7): сначала факты с origin == currentChatId
+        // (отсортированные по composite score внутри своей группы), потом
+        // факты остальных чатов (тоже по score). Так topical context из
+        // current чата идёт первым, а cross-chat факты заполняют оставшиеся
+        // слоты только если у них достаточно высокий score чтобы пробиться
+        // через per-fact threshold выше.
+        val (local, crossChat) = if (currentChatId != null) {
+            passing.partition { it.fact.chatId == currentChatId }
+        } else {
+            // Нет current чата (необычный случай) — все факты в одной группе.
+            emptyList<ScoredFact>() to passing
+        }
+        val tiered = local + crossChat
+        val topResults = tiered.take(topK)
         FactsRepository.reinforce(topResults.map { it.fact.id }, now)
 
         Log.i(TAG, "retrieveFacts: query.len=${query.length}, fts=${ftsResults.size}, " +
                    "vec=${vecResults.size}, merged=${rrfScores.size}, " +
+                   "scored=${scored.size}, passing=${passing.size} " +
+                   "(local=${local.size}, cross=${crossChat.size}), " +
                    "returned=${topResults.size}, top1_score=${topResults[0].score}")
         return topResults
     }

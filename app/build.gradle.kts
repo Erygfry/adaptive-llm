@@ -17,8 +17,8 @@ android {
         applicationId = "com.example.adaptivellm"
         minSdk = 28
         targetSdk = 36
-        versionCode = 15
-        versionName = "1.0.13"
+        versionCode = 16
+        versionName = "1.1.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -88,6 +88,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.work.runtime.ktx)
 
     // Compose
     implementation(platform(libs.compose.bom))

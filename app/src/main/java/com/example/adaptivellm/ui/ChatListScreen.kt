@@ -125,6 +125,16 @@ fun ChatListScreen(viewModel: MainViewModel) {
                         )
                     }
                 },
+                actions = {
+                    // Stage 7 — Память: просмотр всех сохранённых фактов
+                    IconButton(onClick = { viewModel.openFactsMemory() }) {
+                        Icon(
+                            MemoryLibraryIcon,
+                            contentDescription = "Память",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
                 ),
