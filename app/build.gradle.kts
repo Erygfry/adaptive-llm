@@ -17,8 +17,8 @@ android {
         applicationId = "com.example.adaptivellm"
         minSdk = 28
         targetSdk = 36
-        versionCode = 16
-        versionName = "1.1.0"
+        versionCode = 17
+        versionName = "1.1.1"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
