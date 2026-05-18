@@ -289,6 +289,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile
     private var cancelRequested = false
 
+    /**
+     * Job текущего collector'а DownloadService.state. Декларация здесь (не рядом с
+     * `startDownload()`), потому что init блок может стартовать collector
+     * для авто-resume активного download'а (Activity death survive case).
+     */
+    private var downloadCollectJob: kotlinx.coroutines.Job? = null
+
     private val _thinkingMode = MutableStateFlow(0)
     val thinkingMode: StateFlow<Int> = _thinkingMode.asStateFlow()
 
@@ -517,8 +524,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun selectModel(variant: ModelVariant) {
         _selectedModel.value = variant
     }
-
-    private var downloadCollectJob: kotlinx.coroutines.Job? = null
 
     fun startDownload() {
         val model = _selectedModel.value
