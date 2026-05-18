@@ -23,19 +23,19 @@ object ApkInstaller {
     private val _progress = MutableStateFlow<Int?>(null)
     val progress: StateFlow<Int?> = _progress.asStateFlow()
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(5, TimeUnit.MINUTES)
-        .followRedirects(false)
-        .build()
-
+    /**
+     * OkHttp по умолчанию следует 302-redirect'ам. GitHub `browser_download_url`
+     * отдаёт 302 на CDN — клиент проходит его прозрачно, нам redirect-танец
+     * вручную делать не надо. Public репо → auth не требуется.
+     */
     private val downloadClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.MINUTES)
         .build()
 
     /**
-     * Download APK from GitHub (with auth for private repos) and launch install.
+     * Скачивает APK по прямой CDN-ссылке (browser_download_url из release assets)
+     * и запускает установку через FileProvider + ACTION_VIEW.
      */
     suspend fun downloadAndInstall(context: Context, apkUrl: String) {
         if (_progress.value != null) return // already downloading
@@ -47,45 +47,9 @@ object ApkInstaller {
                 apkFile.parentFile?.mkdirs()
                 if (apkFile.exists()) apkFile.delete()
 
-                val request = Request.Builder()
-                    .url(apkUrl)
-                    .header("Authorization", "Bearer ${UpdateChecker.TOKEN}")
-                    .header("Accept", "application/octet-stream")
-                    .build()
-
-                Log.i(TAG, "Requesting APK redirect from: $apkUrl")
-                val redirectResponse = client.newCall(request).execute()
-
-                val downloadUrl = if (redirectResponse.code == 302) {
-                    val location = redirectResponse.header("Location")
-                    redirectResponse.close()
-                    if (location == null) {
-                        Log.e(TAG, "302 but no Location header")
-                        _progress.value = null
-                        return@withContext
-                    }
-                    Log.i(TAG, "Redirected to: $location")
-                    location
-                } else if (redirectResponse.isSuccessful) {
-                    val total = redirectResponse.body!!.contentLength()
-                    downloadWithProgress(redirectResponse.body!!.byteStream(), apkFile, total)
-                    Log.i(TAG, "APK downloaded directly: ${apkFile.length()} bytes")
-                    _progress.value = -1
-                    installApk(context, apkFile)
-                    _progress.value = null
-                    return@withContext
-                } else {
-                    Log.e(TAG, "Initial request failed: ${redirectResponse.code}")
-                    redirectResponse.close()
-                    _progress.value = null
-                    return@withContext
-                }
-
-                val downloadRequest = Request.Builder()
-                    .url(downloadUrl)
-                    .build()
-
-                val response = downloadClient.newCall(downloadRequest).execute()
+                Log.i(TAG, "Downloading APK from: $apkUrl")
+                val request = Request.Builder().url(apkUrl).build()
+                val response = downloadClient.newCall(request).execute()
 
                 if (!response.isSuccessful) {
                     Log.e(TAG, "Download failed: ${response.code}")

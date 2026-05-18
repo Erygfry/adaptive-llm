@@ -25,6 +25,16 @@ class DownloadService : Service() {
     private lateinit var downloader: ModelDownloader
     private var lastNotificationTime = 0L
 
+    /**
+     * Active download tracking — критично для предотвращения dual-write race
+     * на tempFile. Без guard'а два `onStartCommand` (например при reopen после
+     * Activity death) запускали два collector'а на один и тот же `Range`
+     * запрос, которые писали в один tempFile в append mode → байты interleave,
+     * GGUF corruption, garbage на инференсе.
+     */
+    private var activeJob: kotlinx.coroutines.Job? = null
+    private var activeFileName: String? = null
+
     override fun onCreate() {
         super.onCreate()
         downloader = ModelDownloader(applicationContext)
@@ -42,10 +52,23 @@ class DownloadService : Service() {
             return START_NOT_STICKY
         }
 
+        // Dedup: уже скачиваем тот же файл — повторный start игнорируем.
+        // foreground notification остаётся, существующий collector продолжает
+        // эмитить прогресс в shared _state, UI пересоберётся при подписке.
+        if (activeJob?.isActive == true && activeFileName == variant.fileName) {
+            return START_NOT_STICKY
+        }
+        // Переключение на другой файл — отменяем предыдущий job (его tempFile
+        // останется на диске для будущего resume).
+        activeJob?.cancel()
+
+        activeFileName = variant.fileName
+        _activeVariantFile.value = variant.fileName
+
         startForeground(NOTIFICATION_ID, buildNotification("Preparing download...", 0))
         _state.value = DownloadState.Progress(0, 1, "model")
 
-        scope.launch {
+        activeJob = scope.launch {
             downloader.download(variant).collect { state ->
                 _state.value = state
                 when (state) {
@@ -64,10 +87,14 @@ class DownloadService : Service() {
                     }
                     is DownloadState.Complete -> {
                         showCompleteNotification()
+                        activeFileName = null
+                        _activeVariantFile.value = null
                         stopSelf()
                     }
                     is DownloadState.Error -> {
                         showErrorNotification(state.message)
+                        activeFileName = null
+                        _activeVariantFile.value = null
                         stopSelf()
                     }
                 }
@@ -107,7 +134,7 @@ class DownloadService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Adaptive LLM")
+            .setContentTitle(getString(com.example.adaptivellm.R.string.app_name))
             .setContentText(text)
             .setProgress(100, progress, progress == 0)
             .setOngoing(true)
@@ -124,7 +151,7 @@ class DownloadService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("Adaptive LLM")
+            .setContentTitle(getString(com.example.adaptivellm.R.string.app_name))
             .setContentText("Model downloaded successfully")
             .setAutoCancel(true)
             .build()
@@ -135,7 +162,7 @@ class DownloadService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_error)
-            .setContentTitle("Adaptive LLM")
+            .setContentTitle(getString(com.example.adaptivellm.R.string.app_name))
             .setContentText("Download failed: $error")
             .setAutoCancel(true)
             .build()
@@ -147,12 +174,22 @@ class DownloadService : Service() {
         private const val NOTIFICATION_ID = 1001
         const val EXTRA_FILE_NAME = "file_name"
 
-        // Shared state so ViewModel can observe progress
+        // Shared state so ViewModel can observe progress.
         private val _state = MutableStateFlow<DownloadState?>(null)
         val state: StateFlow<DownloadState?> = _state.asStateFlow()
 
+        // Имя файла активного download'а (или null если ничего не качаем).
+        // Нужен ViewModel'у в init для авто-resume UI на DownloadScreen
+        // после Activity death — без этого юзер видит Setup и может ткнуть
+        // Download повторно, что раньше создавало dual-write race.
+        private val _activeVariantFile = MutableStateFlow<String?>(null)
+        val activeVariantFile: StateFlow<String?> = _activeVariantFile.asStateFlow()
+
         fun start(context: Context, variant: ModelVariant) {
-            _state.value = null
+            // НЕ сбрасываем _state — если идёт active download того же файла,
+            // onStartCommand сам это увидит и пропустит дубликат. Для случая
+            // Complete/Error/null clearing делается атомарно внутри сервиса
+            // когда стартует новый job.
             val intent = Intent(context, DownloadService::class.java).apply {
                 putExtra(EXTRA_FILE_NAME, variant.fileName)
             }

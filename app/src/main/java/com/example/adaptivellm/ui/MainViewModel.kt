@@ -437,6 +437,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // Auto-resume DownloadScreen, если foreground service ещё качает модель
+        // (Activity мог быть убит, сервис пережил → static state хранит прогресс).
+        // Без этого юзер видит Setup и может ткнуть Download повторно, что раньше
+        // создавало dual-write race и corrupted GGUF.
+        val activeDlState = DownloadService.state.value
+        val activeDlFile = DownloadService.activeVariantFile.value
+        if (activeDlState is DownloadState.Progress && activeDlFile != null) {
+            val activeVariant = ModelCatalog.variants.find { it.fileName == activeDlFile }
+            if (activeVariant != null) {
+                _selectedModel.value = activeVariant
+                _downloadState.value = activeDlState
+                _screen.value = AppScreen.Download
+                downloadCollectJob?.cancel()
+                downloadCollectJob = viewModelScope.launch {
+                    DownloadService.state.collect { st ->
+                        _downloadState.value = st
+                        if (st is DownloadState.Complete) {
+                            refreshDownloadedModels()
+                            _screen.value = AppScreen.ChatList
+                        }
+                    }
+                }
+            }
+        }
+
         analyticsLogger.logSessionStart()
 
         // Check for app updates on startup (silent — no "up to date" feedback)

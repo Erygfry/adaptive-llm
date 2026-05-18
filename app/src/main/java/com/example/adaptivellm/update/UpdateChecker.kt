@@ -20,7 +20,6 @@ object UpdateChecker {
     private const val OWNER = "Erygfry"
     private const val REPO = "adaptive-llm"
     private const val API_URL = "https://api.github.com/repos/$OWNER/$REPO/releases/latest"
-    internal const val TOKEN = "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"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -28,7 +27,10 @@ object UpdateChecker {
         .build()
 
     /**
-     * Check GitHub Releases for a newer version.
+     * Check GitHub Releases for a newer version. Репозиторий публичный → auth
+     * не требуется. GitHub лимит для unauthenticated запросов — 60/час с IP,
+     * для update check (раз на запуск приложения) — более чем достаточно.
+     *
      * Returns [ReleaseInfo] if an update is available, null otherwise.
      */
     suspend fun check(context: Context): ReleaseInfo? = withContext(Dispatchers.IO) {
@@ -36,7 +38,6 @@ object UpdateChecker {
             val request = Request.Builder()
                 .url(API_URL)
                 .header("Accept", "application/vnd.github+json")
-                .header("Authorization", "Bearer $TOKEN")
                 .build()
 
             val response = client.newCall(request).execute()
@@ -57,8 +58,10 @@ object UpdateChecker {
                 val asset = assets.getJSONObject(i)
                 val name = asset.getString("name")
                 if (name.endsWith(".apk")) {
-                    // Use API URL (not browser_download_url) for private repos
-                    apkUrl = asset.getString("url")
+                    // Прямая CDN-ссылка (публичный репо, auth не нужен).
+                    // Для приватного репо здесь нужна была бы asset.url + Bearer token —
+                    // мы от этой схемы отказались после публикации.
+                    apkUrl = asset.getString("browser_download_url")
                     break
                 }
             }
