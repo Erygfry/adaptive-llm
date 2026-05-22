@@ -9,6 +9,8 @@
     <string name="common_cancel">Abbrechen</string>
     <string name="common_delete">Löschen</string>
     <string name="common_close">Schließen</string>
+    <string name="common_save">Speichern</string>
+    <string name="common_edit">Bearbeiten</string>
     <string name="common_loading">Wird geladen…</string>
     <string name="common_ready">Bereit</string>
     <string name="common_error">Fehler</string>
@@ -28,6 +30,8 @@
     <string name="setup_start_chat">Chat starten</string>
     <string name="setup_download_and_start">Laden &amp; starten</string>
     <string name="setup_delete_model">Modell löschen</string>
+    <string name="setup_delete_model_title">Modell löschen?</string>
+    <string name="setup_delete_model_msg">„%1$s" (%2$d MB) — die Modelldatei wird entfernt. Zur erneuten Nutzung muss sie neu heruntergeladen werden.</string>
 
     <!-- Download -->
     <string name="download_title">Modell wird geladen</string>
@@ -37,6 +41,7 @@
     <string name="download_retry">Wiederholen</string>
     <string name="download_back_to_setup">Zurück zur Einrichtung</string>
     <string name="download_complete">Download abgeschlossen!</string>
+    <string name="download_cancel">Download abbrechen</string>
 
     <!-- Chat -->
     <string name="chat_back_to_list">Zurück zur Chatliste</string>
@@ -73,6 +78,8 @@
     <string name="chatlist_limit_reached">Chat-Limit erreicht (%1$d)</string>
     <string name="chatlist_new_chat">Neuer Chat</string>
     <string name="chatlist_delete_chat">Chat löschen</string>
+    <string name="chatlist_rename_chat">Chat umbenennen</string>
+    <string name="chatlist_rename_placeholder">Neuer Name</string>
     <string name="chatlist_memory">Speicher</string>
 
     <!-- Memory screen -->
@@ -88,6 +95,9 @@
     <string name="memory_source">Quelle</string>
     <string name="memory_source_local">Aus Chat Nr. %1$d</string>
     <string name="memory_source_global">Global</string>
+    <string name="memory_edit_title">Fakt bearbeiten</string>
+    <string name="memory_delete_title">Fakt löschen?</string>
+    <string name="memory_delete_msg">Der Fakt wird aus dem Speicher entfernt und in Antworten nicht mehr verwendet.</string>
     <string name="memory_empty_title">Speicher ist leer</string>
     <string name="memory_empty_subtitle">Fakten erscheinen nach der ersten Verlaufskomprimierung</string>
     <string name="memory_filter_empty_title">Keine Fakten in dieser Kategorie</string>

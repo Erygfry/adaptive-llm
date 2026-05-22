@@ -29,4 +29,15 @@ root ::= "ADD" | "UPDATE" | "NOOP"
 root ::= "none" | digit | digit digit | digit digit digit | digit digit digit digit
 digit ::= [0-9]
 """.trimIndent()
+
+    /**
+     * Category validation grammar. Используется для второго LLM-вызова, который
+     * проверяет факты с category="instruction" — действительно ли это команда
+     * ассистенту, или модель ошиблась и это preference / personal_info / etc.
+     *
+     * Output: ровно одно из 6 названий категорий.
+     */
+    val CATEGORY_GRAMMAR: String = """
+root ::= "instruction" | "preference" | "personal_info" | "goal" | "event" | "relationship"
+""".trimIndent()
 }

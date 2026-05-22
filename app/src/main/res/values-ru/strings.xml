@@ -9,6 +9,8 @@
     <string name="common_cancel">Отмена</string>
     <string name="common_delete">Удалить</string>
     <string name="common_close">Закрыть</string>
+    <string name="common_save">Сохранить</string>
+    <string name="common_edit">Изменить</string>
     <string name="common_loading">Загрузка…</string>
     <string name="common_ready">Готов</string>
     <string name="common_error">Ошибка</string>
@@ -28,6 +30,8 @@
     <string name="setup_start_chat">Начать чат</string>
     <string name="setup_download_and_start">Скачать и начать</string>
     <string name="setup_delete_model">Удалить модель</string>
+    <string name="setup_delete_model_title">Удалить модель?</string>
+    <string name="setup_delete_model_msg">«%1$s» (%2$d МБ) — файл модели будет удалён. Чтобы снова использовать её, потребуется скачать заново.</string>
 
     <!-- Download -->
     <string name="download_title">Загрузка модели</string>
@@ -37,6 +41,7 @@
     <string name="download_retry">Повторить</string>
     <string name="download_back_to_setup">К выбору модели</string>
     <string name="download_complete">Загрузка завершена!</string>
+    <string name="download_cancel">Отменить загрузку</string>
 
     <!-- Chat -->
     <string name="chat_back_to_list">К списку чатов</string>
@@ -73,6 +78,8 @@
     <string name="chatlist_limit_reached">Достигнут лимит чатов (%1$d)</string>
     <string name="chatlist_new_chat">Новый чат</string>
     <string name="chatlist_delete_chat">Удалить чат</string>
+    <string name="chatlist_rename_chat">Переименовать чат</string>
+    <string name="chatlist_rename_placeholder">Новое название</string>
     <string name="chatlist_memory">Память</string>
 
     <!-- Memory screen -->
@@ -88,6 +95,9 @@
     <string name="memory_source">Источник</string>
     <string name="memory_source_local">Из чата #%1$d</string>
     <string name="memory_source_global">Глобальный</string>
+    <string name="memory_edit_title">Изменить факт</string>
+    <string name="memory_delete_title">Удалить факт?</string>
+    <string name="memory_delete_msg">Факт будет удалён из памяти и больше не будет использоваться в ответах.</string>
     <string name="memory_empty_title">Память пока пуста</string>
     <string name="memory_empty_subtitle">Факты появятся после первого сжатия истории чата</string>
     <string name="memory_filter_empty_title">В этой категории пусто</string>

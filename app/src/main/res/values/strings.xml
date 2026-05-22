@@ -14,6 +14,8 @@
     <string name="common_cancel">Cancel</string>
     <string name="common_delete">Delete</string>
     <string name="common_close">Close</string>
+    <string name="common_save">Save</string>
+    <string name="common_edit">Edit</string>
     <string name="common_loading">Loading…</string>
     <string name="common_ready">Ready</string>
     <string name="common_error">Error</string>
@@ -35,6 +37,8 @@
     <string name="setup_start_chat">Start Chat</string>
     <string name="setup_download_and_start">Download &amp; Start</string>
     <string name="setup_delete_model">Delete model</string>
+    <string name="setup_delete_model_title">Delete model?</string>
+    <string name="setup_delete_model_msg">«%1$s» (%2$d MB) — the model file will be removed. To use it again you will need to download it from scratch.</string>
 
     <!-- ============================================================ -->
     <!-- Download screen -->
@@ -46,6 +50,7 @@
     <string name="download_retry">Retry</string>
     <string name="download_back_to_setup">Back to Setup</string>
     <string name="download_complete">Download complete!</string>
+    <string name="download_cancel">Cancel download</string>
 
     <!-- ============================================================ -->
     <!-- Chat screen -->
@@ -88,6 +93,8 @@
     <string name="chatlist_limit_reached">Chat limit reached (%1$d)</string>
     <string name="chatlist_new_chat">New chat</string>
     <string name="chatlist_delete_chat">Delete chat</string>
+    <string name="chatlist_rename_chat">Rename chat</string>
+    <string name="chatlist_rename_placeholder">New name</string>
     <string name="chatlist_memory">Memory</string>
 
     <!-- ============================================================ -->
@@ -105,6 +112,9 @@
     <string name="memory_source">Source</string>
     <string name="memory_source_local">Local to chat #%1$d</string>
     <string name="memory_source_global">Global</string>
+    <string name="memory_edit_title">Edit fact</string>
+    <string name="memory_delete_title">Delete fact?</string>
+    <string name="memory_delete_msg">This fact will be removed from memory and will no longer be used in responses.</string>
     <string name="memory_empty_title">Memory is empty</string>
     <string name="memory_empty_subtitle">Facts will appear after the first chat history compression</string>
     <string name="memory_filter_empty_title">No facts in this category</string>

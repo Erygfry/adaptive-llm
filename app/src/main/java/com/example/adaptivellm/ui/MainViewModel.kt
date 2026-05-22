@@ -562,6 +562,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Отмена активного download'а. Сервис отменяет коротутину и чистит .part
+     * файл. UI сразу возвращается на Setup — не ждём конечного state.
+     */
+    fun cancelDownload() {
+        DownloadService.cancel(getApplication())
+        downloadCollectJob?.cancel()
+        downloadCollectJob = null
+        _downloadState.value = null
+        _screen.value = AppScreen.Setup
+    }
+
     private fun shouldUseVulkan(): Boolean {
         if (FORCE_CPU_ONLY) return false  // см. описание FORCE_CPU_ONLY выше
         if (!deviceProfile.hasVulkan) return false
@@ -1250,6 +1262,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Переименовывает чат. Пустое название → fallback на `chat_default_title`
+     * (тот же что используется для дефолта при первом сообщении).
+     */
+    fun renameChat(chatId: Long, newTitle: String) {
+        val trimmed = newTitle.trim()
+        val finalTitle = trimmed.ifBlank {
+            getApplication<Application>().getString(R.string.chat_default_title)
+        }
+        viewModelScope.launch {
+            try {
+                ChatRepository.updateTitle(chatId, finalTitle)
+                refreshChats()
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "renameChat failed for id=$chatId", e)
+            }
+        }
+    }
+
     /** Удаляет чат (CASCADE: messages, summary, локальные facts) + KV cache файлы. */
     fun deleteChat(chatId: Long) {
         viewModelScope.launch {
@@ -1357,6 +1388,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_factsCategoryFilter.value == category) return
         _factsCategoryFilter.value = category
         refreshFacts()
+    }
+
+    /**
+     * Soft-delete факта (Stage 7 fact mgmt): ставит valid_to=now. Trigger
+     * facts_invalidate каскадно удалит embedding из facts_vec → факт перестанет
+     * появляться в retrieval, getActiveInstructions и на экране «Память».
+     * Запись остаётся в БД для audit chain.
+     */
+    fun invalidateFact(factId: Long) {
+        viewModelScope.launch {
+            try {
+                FactsRepository.invalidateFact(factId)
+                refreshFacts()
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "invalidateFact failed for id=$factId", e)
+            }
+        }
+    }
+
+    /**
+     * Ручное редактирование content факта (Stage 7 fact mgmt). Пересчитывает
+     * embedding из (newContent + старые keywords + старый context) чтобы
+     * retrieval по новому смыслу работал корректно.
+     */
+    fun updateFactContent(factId: Long, newContent: String) {
+        val trimmed = newContent.trim()
+        if (trimmed.isBlank()) return
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                if (!EmbeddingModel.isInitialized) {
+                    android.util.Log.w("MainViewModel",
+                        "updateFactContent: EmbeddingModel not ready, skip (id=$factId)")
+                    return@launch
+                }
+                val factsById = FactsRepository.getByIds(listOf(factId))
+                val fact = factsById[factId] ?: run {
+                    android.util.Log.w("MainViewModel", "updateFactContent: fact id=$factId not found")
+                    return@launch
+                }
+                // Тот же формат composite-text что использует EvictionEngine при
+                // первоначальной вставке — content + keywords + context.
+                val embText = buildString {
+                    append(trimmed)
+                    if (fact.keywords.isNotEmpty()) {
+                        append(" Keywords: ").append(fact.keywords.joinToString(", "))
+                    }
+                    if (!fact.context.isNullOrBlank()) {
+                        append(" Context: ").append(fact.context)
+                    }
+                }
+                val newEmbedding = EmbeddingModel.encode(embText)
+                FactsRepository.updateContent(factId, trimmed, newEmbedding)
+                refreshFacts()
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "updateFactContent failed for id=$factId", e)
+            }
+        }
     }
 
     /** Подгружает факты из БД с учётом текущего filter'а. */

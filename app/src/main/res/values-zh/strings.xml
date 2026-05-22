@@ -9,6 +9,8 @@
     <string name="common_cancel">取消</string>
     <string name="common_delete">删除</string>
     <string name="common_close">关闭</string>
+    <string name="common_save">保存</string>
+    <string name="common_edit">编辑</string>
     <string name="common_loading">加载中…</string>
     <string name="common_ready">就绪</string>
     <string name="common_error">错误</string>
@@ -28,6 +30,8 @@
     <string name="setup_start_chat">开始聊天</string>
     <string name="setup_download_and_start">下载并开始</string>
     <string name="setup_delete_model">删除模型</string>
+    <string name="setup_delete_model_title">删除模型？</string>
+    <string name="setup_delete_model_msg">"%1$s"（%2$d MB）— 模型文件将被删除。要再次使用需重新下载。</string>
 
     <!-- Download -->
     <string name="download_title">正在下载模型</string>
@@ -37,6 +41,7 @@
     <string name="download_retry">重试</string>
     <string name="download_back_to_setup">返回设置</string>
     <string name="download_complete">下载完成！</string>
+    <string name="download_cancel">取消下载</string>
 
     <!-- Chat -->
     <string name="chat_back_to_list">返回聊天列表</string>
@@ -73,6 +78,8 @@
     <string name="chatlist_limit_reached">已达到聊天上限（%1$d）</string>
     <string name="chatlist_new_chat">新聊天</string>
     <string name="chatlist_delete_chat">删除聊天</string>
+    <string name="chatlist_rename_chat">重命名聊天</string>
+    <string name="chatlist_rename_placeholder">新名称</string>
     <string name="chatlist_memory">记忆</string>
 
     <!-- Memory screen -->
@@ -88,6 +95,9 @@
     <string name="memory_source">来源</string>
     <string name="memory_source_local">来自聊天 #%1$d</string>
     <string name="memory_source_global">全局</string>
+    <string name="memory_edit_title">编辑事实</string>
+    <string name="memory_delete_title">删除事实？</string>
+    <string name="memory_delete_msg">该事实将从记忆中移除，不再用于回答。</string>
     <string name="memory_empty_title">记忆为空</string>
     <string name="memory_empty_subtitle">事实将在首次聊天历史压缩后出现</string>
     <string name="memory_filter_empty_title">此类别为空</string>

@@ -68,8 +68,36 @@ fun FactsMemoryScreen(viewModel: MainViewModel) {
     val loading by viewModel.factsLoading.collectAsState()
 
     var detail by remember { mutableStateOf<FactsRepository.Fact?>(null) }
+    var editing by remember { mutableStateOf<FactsRepository.Fact?>(null) }
+    var deleting by remember { mutableStateOf<FactsRepository.Fact?>(null) }
+
     detail?.let { f ->
-        FactDetailDialog(fact = f, onDismiss = { detail = null })
+        FactDetailDialog(
+            fact = f,
+            onDismiss = { detail = null },
+            onEdit = { detail = null; editing = f },
+            onDelete = { detail = null; deleting = f },
+        )
+    }
+    editing?.let { f ->
+        FactEditDialog(
+            fact = f,
+            onDismiss = { editing = null },
+            onSave = { newContent ->
+                viewModel.updateFactContent(f.id, newContent)
+                editing = null
+            },
+        )
+    }
+    deleting?.let { f ->
+        FactDeleteConfirmDialog(
+            fact = f,
+            onDismiss = { deleting = null },
+            onConfirm = {
+                viewModel.invalidateFact(f.id)
+                deleting = null
+            },
+        )
     }
 
     Scaffold(
@@ -219,7 +247,12 @@ private fun CategoryBadge(category: String) {
 }
 
 @Composable
-private fun FactDetailDialog(fact: FactsRepository.Fact, onDismiss: () -> Unit) {
+private fun FactDetailDialog(
+    fact: FactsRepository.Fact,
+    onDismiss: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -263,8 +296,96 @@ private fun FactDetailDialog(fact: FactsRepository.Fact, onDismiss: () -> Unit) 
                 )
             }
         },
+        // AlertDialog принимает один Row в confirmButton — пакуем три действия туда.
+        // Edit (primary) и Close (dismissive) + Delete с error tint.
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
+            Row {
+                TextButton(onClick = onDelete) {
+                    Text(
+                        stringResource(R.string.common_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                TextButton(onClick = onEdit) {
+                    Text(stringResource(R.string.common_edit))
+                }
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.common_close))
+                }
+            }
+        },
+    )
+}
+
+/** Диалог редактирования content факта. */
+@Composable
+private fun FactEditDialog(
+    fact: FactsRepository.Fact,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var text by remember(fact.id) { mutableStateOf(fact.content) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.memory_edit_title)) },
+        text = {
+            androidx.compose.material3.OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2,
+                maxLines = 6,
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(text) },
+                enabled = text.trim().isNotBlank() && text.trim() != fact.content,
+            ) {
+                Text(stringResource(R.string.common_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.common_cancel))
+            }
+        },
+    )
+}
+
+/** Подтверждение soft-delete'а факта. */
+@Composable
+private fun FactDeleteConfirmDialog(
+    fact: FactsRepository.Fact,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.memory_delete_title)) },
+        text = {
+            Column {
+                Text(stringResource(R.string.memory_delete_msg))
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "«${fact.content}»",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    stringResource(R.string.common_delete),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.common_cancel))
+            }
         },
     )
 }

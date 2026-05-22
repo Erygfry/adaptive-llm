@@ -76,6 +76,24 @@ fun DownloadScreen(viewModel: MainViewModel) {
                     "$downloadedMb / $totalMb MB (${(s.percent * 100).toInt()}%)",
                     style = MaterialTheme.typography.bodyLarge,
                 )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                OutlinedButton(onClick = { viewModel.cancelDownload() }) {
+                    Text(stringResource(R.string.download_cancel))
+                }
+            }
+
+            null -> {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(stringResource(R.string.download_preparing), style = MaterialTheme.typography.bodyLarge)
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                OutlinedButton(onClick = { viewModel.cancelDownload() }) {
+                    Text(stringResource(R.string.download_cancel))
+                }
             }
 
             is DownloadState.Error -> {
@@ -104,12 +122,6 @@ fun DownloadScreen(viewModel: MainViewModel) {
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.primary,
                 )
-            }
-
-            null -> {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(stringResource(R.string.download_preparing), style = MaterialTheme.typography.bodyLarge)
             }
         }
     }

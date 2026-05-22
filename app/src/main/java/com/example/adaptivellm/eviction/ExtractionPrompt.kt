@@ -140,6 +140,43 @@ Calibration tips:
 - A user's "favorite color" is a 4-5, NOT a 9.
 - A user being "interested in some topic" is a 4-6, NOT a 9.
 
+EXAMPLE — study how categories and importance are assigned in practice:
+
+Example dialog (NOT the dialog you are processing — this is just a demo):
+  #1 [user]: Привет, я Алексей, живу в Петербурге, работаю Python разработчиком.
+  #2 [assistant]: Привет, Алексей! Чем могу помочь?
+  #3 [user]: Кстати, отвечай мне на ты и покороче, без длинных объяснений.
+  #4 [assistant]: Понял, договорились.
+  #5 [user]: Я учу испанский для поездки в Барселону летом, посоветуешь курс?
+
+Correct extraction from this dialog:
+[
+  {"content": "User name is Aleksey", "keywords": ["name","Aleksey"],
+   "context": "User introduced himself by name",
+   "category": "personal_info", "importance": 7, "event_date": null},
+  {"content": "User lives in St. Petersburg", "keywords": ["location","Saint Petersburg"],
+   "context": "City of residence",
+   "category": "personal_info", "importance": 6, "event_date": null},
+  {"content": "User works as a Python developer", "keywords": ["python","developer","job"],
+   "context": "User's occupation",
+   "category": "personal_info", "importance": 7, "event_date": null},
+  {"content": "Address user informally with 'ты' and respond briefly without long explanations",
+   "keywords": ["tone","concise","informal"],
+   "context": "Explicit style command from user",
+   "category": "instruction", "importance": 9, "event_date": null},
+  {"content": "User is learning Spanish for a summer trip to Barcelona",
+   "keywords": ["spanish","Barcelona","learning","trip"],
+   "context": "Active learning goal with practical motivation",
+   "category": "goal", "importance": 6, "event_date": null}
+]
+
+Notice carefully:
+  - "respond briefly" → instruction (behavior RULE for assistant, not a user preference)
+  - Name, city, job → personal_info (NOT preference — these are facts about who user IS)
+  - "Learning Spanish" → goal (active activity), NOT preference (not "user likes Spanish")
+  - Importance 6-7 for stable personal facts, 9 for explicit behavior rule
+  - NO fact got 10 in this example — 10 reserved for truly urgent / time-critical
+
 Return JSON:
 {
   "summary": {

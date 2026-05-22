@@ -37,6 +37,45 @@ Output exactly one word: ADD, UPDATE, or NOOP.
 """.trimIndent()
 
     /**
+     * Category validation для факта, который extraction LLM пометил как
+     * `instruction`. Маленькие модели часто промахиваются и записывают в
+     * `instruction` обычные personal_info / preference / goal факты («User
+     * lives in Moscow», «User likes blue»). Этот prompt просит модель
+     * перепроверить категорию с явными определениями и примерами.
+     *
+     * Output ограничен через [ConflictGbnf.CATEGORY_GRAMMAR] — ровно одно из
+     * 6 названий категории.
+     */
+    fun buildCategoryValidation(factContent: String): String = """
+You are validating the category assigned to a fact extracted from a conversation.
+
+A fact was classified as "instruction". Instructions are EXPLICIT commands the
+user gave about how the assistant must behave. They are behavior RULES, not
+descriptions of the user.
+
+Valid examples of "instruction":
+  - "Always respond in English."
+  - "Don't use emojis."
+  - "Be brief, no long explanations."
+  - "Address user informally with 'ты'."
+  - "Respond only in formal style."
+
+INVALID examples (these should be in OTHER categories):
+  - "User likes brief responses" → preference (it's a taste, not a command)
+  - "User lives in Moscow" → personal_info (it's a fact about who user IS)
+  - "User is learning Spanish" → goal (it's an activity)
+  - "User's daughter Anna is 7" → relationship (it's about a connection)
+  - "User flies to Tokyo on 2026-05-25" → event (dated occurrence)
+  - "User mentioned Python" → not a fact at all, skip
+
+The fact in question:
+"$factContent"
+
+What is the CORRECT category for this fact? Reply with EXACTLY one word:
+instruction, preference, personal_info, goal, event, or relationship.
+""".trimIndent()
+
+    /**
      * Instruction conflict prompt: вытесняет ли новая instruction какую-то
      * из активных? Возвращает id вытесняемой или "none".
      *

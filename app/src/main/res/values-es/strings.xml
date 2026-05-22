@@ -9,6 +9,8 @@
     <string name="common_cancel">Cancelar</string>
     <string name="common_delete">Eliminar</string>
     <string name="common_close">Cerrar</string>
+    <string name="common_save">Guardar</string>
+    <string name="common_edit">Editar</string>
     <string name="common_loading">Cargando…</string>
     <string name="common_ready">Listo</string>
     <string name="common_error">Error</string>
@@ -28,6 +30,8 @@
     <string name="setup_start_chat">Iniciar chat</string>
     <string name="setup_download_and_start">Descargar e iniciar</string>
     <string name="setup_delete_model">Eliminar modelo</string>
+    <string name="setup_delete_model_title">¿Eliminar modelo?</string>
+    <string name="setup_delete_model_msg">«%1$s» (%2$d MB) — el archivo del modelo se eliminará. Para volver a usarlo tendrás que descargarlo de nuevo.</string>
 
     <!-- Download -->
     <string name="download_title">Descargando modelo</string>
@@ -37,6 +41,7 @@
     <string name="download_retry">Reintentar</string>
     <string name="download_back_to_setup">Volver a la configuración</string>
     <string name="download_complete">¡Descarga completa!</string>
+    <string name="download_cancel">Cancelar descarga</string>
 
     <!-- Chat -->
     <string name="chat_back_to_list">Volver a la lista de chats</string>
@@ -73,6 +78,8 @@
     <string name="chatlist_limit_reached">Límite de chats alcanzado (%1$d)</string>
     <string name="chatlist_new_chat">Nuevo chat</string>
     <string name="chatlist_delete_chat">Eliminar chat</string>
+    <string name="chatlist_rename_chat">Renombrar chat</string>
+    <string name="chatlist_rename_placeholder">Nuevo nombre</string>
     <string name="chatlist_memory">Memoria</string>
 
     <!-- Memory screen -->
@@ -88,6 +95,9 @@
     <string name="memory_source">Origen</string>
     <string name="memory_source_local">Del chat n.º %1$d</string>
     <string name="memory_source_global">Global</string>
+    <string name="memory_edit_title">Editar hecho</string>
+    <string name="memory_delete_title">¿Eliminar hecho?</string>
+    <string name="memory_delete_msg">El hecho se eliminará de la memoria y dejará de usarse en las respuestas.</string>
     <string name="memory_empty_title">La memoria está vacía</string>
     <string name="memory_empty_subtitle">Los hechos aparecerán tras la primera compresión del historial</string>
     <string name="memory_filter_empty_title">No hay hechos en esta categoría</string>

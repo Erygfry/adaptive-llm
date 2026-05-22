@@ -122,6 +122,51 @@ object FactsRepository {
     }
 
     /**
+     * Ручное редактирование content факта пользователем (Stage 7 fact mgmt).
+     *
+     * Обновляет `facts.content` и пересинхронизирует `facts_vec` — sqlite-vec
+     * не поддерживает UPDATE embedding'а (partition column), поэтому DELETE+INSERT.
+     * `facts_au` trigger автоматически re-sync'ит FTS5 при UPDATE content/keywords/context.
+     *
+     * Keywords и context не меняются — только content. Embedding пересчитывается
+     * caller'ом (ViewModel) из новой content + старых keywords + старого context.
+     */
+    suspend fun updateContent(
+        id: Long,
+        newContent: String,
+        newEmbedding: FloatArray,
+    ): Unit = withContext(MemoryDatabaseHelper.dbDispatcher) {
+        require(newEmbedding.size == 384) { "embedding must be 384-dim, got ${newEmbedding.size}" }
+        val db = MemoryDatabaseHelper.database()
+        val embJson = embeddingToJson(newEmbedding)
+        db.inTransaction {
+            // 1. UPDATE content в facts → trigger facts_au автоматически re-sync'ит FTS5
+            val rc1 = db.exec(
+                "UPDATE facts SET content = '${escape(newContent)}' WHERE id = $id;"
+            )
+            check(rc1 == MemoryDatabase.SQLITE_OK) { "UPDATE facts.content failed: ${db.lastError()}" }
+
+            // 2. Получить category для re-insert в facts_vec
+            val catJson = db.queryToJson("SELECT category FROM facts WHERE id = $id;")
+            if (catJson.startsWith("ERROR")) error("read category failed: $catJson")
+            val arr = JSONArray(catJson)
+            if (arr.length() == 0) error("fact id=$id not found")
+            val category = arr.getJSONObject(0).getString("category")
+
+            // 3. DELETE+INSERT в facts_vec для нового embedding
+            val rc2 = db.exec("DELETE FROM facts_vec WHERE fact_id = $id;")
+            check(rc2 == MemoryDatabase.SQLITE_OK) { "DELETE facts_vec failed: ${db.lastError()}" }
+
+            val rc3 = db.exec(
+                "INSERT INTO facts_vec (fact_id, category, valid_to, embedding) VALUES (" +
+                "$id, '${escape(category)}', 0, '$embJson');"
+            )
+            check(rc3 == MemoryDatabase.SQLITE_OK) { "INSERT facts_vec failed: ${db.lastError()}" }
+        }
+        Log.i(TAG, "updateContent: id=$id, new_len=${newContent.length}")
+    }
+
+    /**
      * Инвалидирует факт (UPDATE valid_to). Trigger `facts_invalidate`
      * автоматически удаляет embedding из `facts_vec`. FTS5 row остаётся
      * (фильтруется через JOIN с `facts.valid_to IS NULL`).

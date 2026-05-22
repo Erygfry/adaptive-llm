@@ -30,7 +30,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -47,6 +49,36 @@ fun SetupScreen(viewModel: MainViewModel) {
     val profile = viewModel.deviceProfile
     val downloadedModels by viewModel.downloadedModels.collectAsState()
     val availableUpdate by viewModel.availableUpdate.collectAsState()
+
+    // Pending model deletion — открывает confirmation dialog перед удалением.
+    var pendingDelete by remember { mutableStateOf<com.example.adaptivellm.model.ModelVariant?>(null) }
+    pendingDelete?.let { variant ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(stringResource(R.string.setup_delete_model_title)) },
+            text = {
+                Text(stringResource(
+                    R.string.setup_delete_model_msg,
+                    variant.displayName,
+                    variant.fileSizeMb.toInt(),
+                ))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteModel(variant)
+                    pendingDelete = null
+                }) {
+                    Text(stringResource(R.string.common_delete),
+                        color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
 
     // Update dialog
     val updateProgress by com.example.adaptivellm.update.ApkInstaller.progress.collectAsState()
@@ -236,7 +268,7 @@ fun SetupScreen(viewModel: MainViewModel) {
                         }
                         if (isDownloaded) {
                             IconButton(
-                                onClick = { viewModel.deleteModel(variant) },
+                                onClick = { pendingDelete = variant },
                                 modifier = Modifier.size(36.dp),
                             ) {
                                 Icon(

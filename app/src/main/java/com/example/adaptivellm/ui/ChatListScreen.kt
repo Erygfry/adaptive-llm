@@ -1,7 +1,9 @@
 package com.example.adaptivellm.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -27,6 +30,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,6 +63,39 @@ fun ChatListScreen(viewModel: MainViewModel) {
     val isSwitchingChat by viewModel.isSwitchingChat.collectAsState()
     val engineState by viewModel.engine.state.collectAsState()
     val loadedModelName by viewModel.loadedModelName.collectAsState()
+
+    // Pending rename — открывает диалог с TextField для нового названия.
+    var pendingRename by remember { mutableStateOf<ChatRepository.ChatInfo?>(null) }
+    pendingRename?.let { chat ->
+        val initial = chat.title?.ifBlank { null } ?: stringResource(R.string.common_untitled)
+        var newTitle by remember(chat.id) { mutableStateOf(initial) }
+        AlertDialog(
+            onDismissRequest = { pendingRename = null },
+            title = { Text(stringResource(R.string.chatlist_rename_chat)) },
+            text = {
+                OutlinedTextField(
+                    value = newTitle,
+                    onValueChange = { newTitle = it },
+                    label = { Text(stringResource(R.string.chatlist_rename_placeholder)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.renameChat(chat.id, newTitle)
+                    pendingRename = null
+                }) {
+                    Text(stringResource(R.string.common_save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRename = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
 
     // Confirmation dialog для удаления
     var pendingDelete by remember { mutableStateOf<ChatRepository.ChatInfo?>(null) }
@@ -216,6 +253,8 @@ fun ChatListScreen(viewModel: MainViewModel) {
                     ChatListItem(
                         chat = chat,
                         onClick = { viewModel.selectChat(chat.id) },
+                        onLongClick = { pendingRename = chat },
+                        onRenameClick = { pendingRename = chat },
                         onDeleteClick = { pendingDelete = chat },
                         enabled = !isSwitchingChat,
                     )
@@ -225,10 +264,13 @@ fun ChatListScreen(viewModel: MainViewModel) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChatListItem(
     chat: ChatRepository.ChatInfo,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit,
     enabled: Boolean,
 ) {
@@ -240,7 +282,11 @@ private fun ChatListItem(
                 if (enabled) MaterialTheme.colorScheme.surfaceVariant
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
             )
-            .clickable(enabled = enabled, onClick = onClick)
+            .combinedClickable(
+                enabled = enabled,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            )
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -257,6 +303,18 @@ private fun ChatListItem(
                 text = formatRelativeTime(chat.lastActiveAt),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            )
+        }
+        IconButton(
+            onClick = onRenameClick,
+            enabled = enabled,
+            modifier = Modifier.size(36.dp),
+        ) {
+            Icon(
+                Icons.Default.Create,
+                contentDescription = stringResource(R.string.chatlist_rename_chat),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 0.7f else 0.3f),
+                modifier = Modifier.size(20.dp),
             )
         }
         IconButton(

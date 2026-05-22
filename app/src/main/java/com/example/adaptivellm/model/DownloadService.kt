@@ -42,6 +42,23 @@ class DownloadService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Cancel action — отменяем активный download, чистим .part файл, останавливаем service.
+        if (intent?.action == ACTION_CANCEL) {
+            val cancelledFile = activeFileName
+            activeJob?.cancel()
+            activeJob = null
+            activeFileName = null
+            _activeVariantFile.value = null
+            _state.value = null
+            if (cancelledFile != null) {
+                runCatching { java.io.File(filesDir, "$cancelledFile.part").delete() }
+            }
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.cancel(NOTIFICATION_ID)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         val fileName = intent?.getStringExtra(EXTRA_FILE_NAME)
         val variant = fileName?.let { name ->
             ModelCatalog.variants.find { it.fileName == name }
@@ -177,6 +194,7 @@ class DownloadService : Service() {
         private const val CHANNEL_ID = "download_channel"
         private const val NOTIFICATION_ID = 1001
         const val EXTRA_FILE_NAME = "file_name"
+        private const val ACTION_CANCEL = "com.example.adaptivellm.action.CANCEL_DOWNLOAD"
 
         // Shared state so ViewModel can observe progress.
         private val _state = MutableStateFlow<DownloadState?>(null)
@@ -198,6 +216,20 @@ class DownloadService : Service() {
                 putExtra(EXTRA_FILE_NAME, variant.fileName)
             }
             context.startForegroundService(intent)
+        }
+
+        /**
+         * Отменяет активный download. Сервис: cancel'ит coroutine, удаляет .part
+         * файл, очищает state, останавливает foreground notification и self.
+         * Безопасно вызывать когда download'а нет — service просто stopSelf'ится.
+         */
+        fun cancel(context: Context) {
+            val intent = Intent(context, DownloadService::class.java).apply {
+                action = ACTION_CANCEL
+            }
+            // startService (не startForegroundService) — мы не запускаем новый
+            // foreground task, а отправляем cancel-сигнал существующему сервису.
+            context.startService(intent)
         }
     }
 }

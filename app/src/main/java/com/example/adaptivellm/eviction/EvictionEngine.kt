@@ -361,12 +361,34 @@ object EvictionEngine {
 
             // Стейдж 6.2: parse + conflict resolution (Шаг 4.4) per fact.
             val factsArr = json.getJSONArray("facts")
-            val parsed: List<ExtractedFact> = (0 until factsArr.length()).mapNotNull { i ->
+            val parsedRaw: List<ExtractedFact> = (0 until factsArr.length()).mapNotNull { i ->
                 try {
                     parseFactFromJson(factsArr.getJSONObject(i))
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to parse fact #$i: ${e.message}")
                     null
+                }
+            }
+
+            // Stage 7 — category validation pass для instruction-фактов.
+            // Маленькая модель часто ошибочно классифицирует как `instruction`
+            // обычные personal_info / preference / goal факты. Второй LLM-call
+            // с GBNF-ограничением на 6 категорий перепроверяет и при необходимости
+            // переклассифицирует.
+            val parsed = parsedRaw.map { fact ->
+                if (fact.category != "instruction") return@map fact
+                val validated = try {
+                    runCategoryValidation(fact, engine, snapshotBase, systemPrompt, modelKey, nCtx)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Category validation failed for '${fact.content.take(50)}': ${e.message}")
+                    "instruction"  // оставляем как было если validation упал
+                }
+                if (validated != "instruction") {
+                    Log.i(TAG, "Category reclassified: 'instruction' → '$validated' for fact: " +
+                               "'${fact.content.take(80)}'")
+                    fact.copy(category = validated)
+                } else {
+                    fact
                 }
             }
             totalParsed = parsed.size
@@ -674,6 +696,42 @@ object EvictionEngine {
         val newId = insertNewFact(fact, embedding, chatId = chatId, sourceMessageId = sourceMessageId)
         FactsRepository.invalidateFact(target.id, supersededBy = newId)
         return ResolveResult.UPDATED
+    }
+
+    /**
+     * Single LLM call: validates that an `instruction`-classified fact is really
+     * an instruction (behavior rule). Returns the correct category name.
+     *
+     * Если категория = "instruction" — оставляем как было.
+     * Иначе модель указала правильную категорию из 6 (через GBNF).
+     */
+    private suspend fun runCategoryValidation(
+        fact: ExtractedFact,
+        engine: InferenceEngine,
+        snapshotBase: SnapshotBaseManager,
+        systemPrompt: String,
+        modelKey: String,
+        nCtx: Int,
+    ): String {
+        val snapshotLoaded = snapshotBase.load(engine, systemPrompt, modelKey, nCtx)
+        if (!snapshotLoaded) engine.setSystemPrompt(systemPrompt)
+        engine.setGrammar(ConflictGbnf.CATEGORY_GRAMMAR)
+        val output = try {
+            val prompt = ConflictPrompt.buildCategoryValidation(fact.content)
+            val sb = StringBuilder()
+            engine.sendMessage(prompt, CONFLICT_DECISION_MAX_TOKENS).toList().forEach { sb.append(it) }
+            sb.toString().trim()
+        } finally {
+            engine.clearGrammar()
+        }
+        // Normalize — GBNF гарантирует одно из 6 значений, но добавим fallback
+        // на случай если grammar parse fail (см. Stage 6.1 markdown-fence issue).
+        val valid = setOf("instruction", "preference", "personal_info", "goal", "event", "relationship")
+        val match = valid.firstOrNull { output.contains(it, ignoreCase = true) }
+        return match ?: run {
+            Log.w(TAG, "CategoryValidation: unexpected output '$output' → keeping 'instruction'")
+            "instruction"
+        }
     }
 
     /**
