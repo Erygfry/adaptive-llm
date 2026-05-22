@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Chinese (Simplified) translations -->
+
+    <string name="app_name">LocaLLM</string>
+
+    <!-- Common -->
+    <string name="common_back">返回</string>
+    <string name="common_cancel">取消</string>
+    <string name="common_delete">删除</string>
+    <string name="common_close">关闭</string>
+    <string name="common_loading">加载中…</string>
+    <string name="common_ready">就绪</string>
+    <string name="common_error">错误</string>
+    <string name="common_initializing">初始化中…</string>
+    <string name="common_untitled">无标题</string>
+    <string name="common_settings">设置</string>
+
+    <!-- Setup -->
+    <string name="setup_device_profile">设备信息</string>
+    <string name="setup_recommended">推荐：%1$s</string>
+    <string name="setup_available_models">可用模型</string>
+    <string name="setup_not_supported_title">设备不支持</string>
+    <string name="setup_not_supported_desc">此设备的内存不足以运行任何可用模型。至少需要 6 GB 内存。</string>
+    <string name="setup_param_size_header">%1$s 参数</string>
+    <string name="setup_downloaded">已下载</string>
+    <string name="setup_model_specs">%1$d MB · 最低内存：%2$d GB</string>
+    <string name="setup_start_chat">开始聊天</string>
+    <string name="setup_download_and_start">下载并开始</string>
+    <string name="setup_delete_model">删除模型</string>
+
+    <!-- Download -->
+    <string name="download_title">正在下载模型</string>
+    <string name="download_progress">正在下载 %1$s…</string>
+    <string name="download_preparing">准备中…</string>
+    <string name="download_error">错误：%1$s</string>
+    <string name="download_retry">重试</string>
+    <string name="download_back_to_setup">返回设置</string>
+    <string name="download_complete">下载完成！</string>
+
+    <!-- Chat -->
+    <string name="chat_back_to_list">返回聊天列表</string>
+    <string name="chat_loading">加载聊天中…</string>
+    <string name="chat_loading_model">加载模型中…</string>
+    <string name="chat_ready_format">就绪 · %1$s%2$s</string>
+    <string name="chat_evicting_default">正在压缩聊天历史…</string>
+    <string name="chat_creating_profile">正在创建记忆配置…</string>
+    <string name="chat_input_placeholder">输入消息…</string>
+    <string name="chat_send">发送</string>
+    <string name="chat_stop_generation">停止生成</string>
+    <string name="chat_thinking_header">思考</string>
+    <string name="chat_thinking_auto">自动</string>
+    <string name="chat_thinking_always">始终</string>
+    <string name="chat_thinking_off">关闭</string>
+    <string name="chat_check_for_updates">检查更新</string>
+
+    <!-- Update dialog -->
+    <string name="update_available">有可用更新：v%1$s</string>
+    <string name="update_in_progress">更新中…</string>
+    <string name="update_downloading">下载中：%1$d%%</string>
+    <string name="update_installing">安装中…</string>
+    <string name="update_button">更新</string>
+    <string name="update_later">稍后</string>
+    <string name="update_app_up_to_date">应用已是最新版本</string>
+
+    <!-- Chat list -->
+    <string name="chatlist_title">聊天</string>
+    <string name="chatlist_delete_title">删除聊天？</string>
+    <string name="chatlist_delete_msg">"%1$s" — 此聊天的所有消息将被永久删除。</string>
+    <string name="chatlist_back_to_setup">返回模型选择</string>
+    <string name="chatlist_empty_title">暂无聊天</string>
+    <string name="chatlist_empty_subtitle">点击 + 开始第一次对话</string>
+    <string name="chatlist_limit_reached">已达到聊天上限（%1$d）</string>
+    <string name="chatlist_new_chat">新聊天</string>
+    <string name="chatlist_delete_chat">删除聊天</string>
+    <string name="chatlist_memory">记忆</string>
+
+    <!-- Memory screen -->
+    <string name="memory_title">记忆</string>
+    <string name="memory_filter_all">全部</string>
+    <string name="memory_fact_id">事实 #%1$d</string>
+    <string name="memory_importance">重要性</string>
+    <string name="memory_access_count">访问次数</string>
+    <string name="memory_context">上下文</string>
+    <string name="memory_keywords">关键词</string>
+    <string name="memory_created">创建时间</string>
+    <string name="memory_event_date">事件日期</string>
+    <string name="memory_source">来源</string>
+    <string name="memory_source_local">来自聊天 #%1$d</string>
+    <string name="memory_source_global">全局</string>
+    <string name="memory_empty_title">记忆为空</string>
+    <string name="memory_empty_subtitle">事实将在首次聊天历史压缩后出现</string>
+    <string name="memory_filter_empty_title">此类别为空</string>
+    <string name="memory_filter_empty_subtitle">尝试其他类别或"全部"</string>
+
+    <!-- Categories -->
+    <string name="cat_preference">偏好</string>
+    <string name="cat_goal">目标</string>
+    <string name="cat_personal_info">个人信息</string>
+    <string name="cat_instruction">指令</string>
+    <string name="cat_event">事件</string>
+    <string name="cat_relationship">关系</string>
+
+    <!-- Settings -->
+    <string name="settings_title">设置</string>
+    <string name="settings_section_theme">主题</string>
+    <string name="settings_theme_system">跟随系统</string>
+    <string name="settings_theme_light">浅色</string>
+    <string name="settings_theme_dark">深色</string>
+    <string name="settings_section_memory">记忆</string>
+    <string name="settings_cross_chat_label">使用其他聊天的事实</string>
+    <string name="settings_cross_chat_on">模型查看所有聊天的事实。当前聊天的事实优先；其余填充 Top-K 的末尾。</string>
+    <string name="settings_cross_chat_off">模型仅查看当前聊天的事实。聊天之间完全隔离 — 适合私密话题。</string>
+    <string name="settings_section_language">语言</string>
+    <string name="settings_language_system">跟随系统</string>
+
+    <!-- Eviction progress -->
+    <string name="eviction_analyze_dialog">分析对话并提取事实…</string>
+    <string name="eviction_extract_facts">提取事实并更新摘要…</string>
+    <string name="eviction_dedup_facts">事实去重 (%1$d/%2$d)…</string>
+    <string name="eviction_save_profile">保存配置中…</string>
+    <string name="eviction_restore_context">恢复上下文中…</string>
+
+    <!-- Notifications -->
+    <string name="notif_download_preparing">准备下载中…</string>
+    <string name="notif_download_progress">正在下载 %1$s：%2$d / %3$d MB</string>
+    <string name="notif_download_complete">模型下载成功</string>
+    <string name="notif_download_failed">下载失败：%1$s</string>
+
+    <!-- Chat fallback strings -->
+    <string name="chat_default_title">聊天</string>
+    <string name="chat_cancelled_message">（消息已取消）</string>
+
+    <!-- Relative time -->
+    <string name="time_just_now">刚刚</string>
+
+    <plurals name="memory_facts_count">
+        <item quantity="other">%d 条事实</item>
+    </plurals>
+    <plurals name="time_minutes_ago">
+        <item quantity="other">%d 分钟前</item>
+    </plurals>
+    <plurals name="time_hours_ago">
+        <item quantity="other">%d 小时前</item>
+    </plurals>
+    <plurals name="time_days_ago">
+        <item quantity="other">%d 天前</item>
+    </plurals>
+</resources>

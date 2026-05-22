@@ -253,6 +253,7 @@ fun MarkdownText(
 
 /** Fenced code block with a copy button in the top-right corner. */
 @Composable
+@Suppress("DEPRECATION") // LocalClipboard миграция на suspend API — отдельная задача
 private fun CodeBlock(
     code: String,
     language: String,

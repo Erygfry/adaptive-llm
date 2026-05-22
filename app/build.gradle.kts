@@ -17,8 +17,8 @@ android {
         applicationId = "com.example.adaptivellm"
         minSdk = 28
         targetSdk = 36
-        versionCode = 17
-        versionName = "1.1.1"
+        versionCode = 18
+        versionName = "1.1.2"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -89,6 +89,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.work.runtime.ktx)
+    // AppCompatDelegate.setApplicationLocales — per-app locale override (Stage 7).
+    // НЕ используем AppCompat-темы — только runtime locale switching API.
+    implementation(libs.androidx.appcompat)
 
     // Compose
     implementation(platform(libs.compose.bom))

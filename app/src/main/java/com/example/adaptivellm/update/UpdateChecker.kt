@@ -2,6 +2,7 @@ package com.example.adaptivellm.update
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -17,6 +18,7 @@ data class ReleaseInfo(
 
 object UpdateChecker {
 
+    private const val TAG = "UpdateChecker"
     private const val OWNER = "Erygfry"
     private const val REPO = "adaptive-llm"
     private const val API_URL = "https://api.github.com/repos/$OWNER/$REPO/releases/latest"
@@ -41,14 +43,23 @@ object UpdateChecker {
                 .build()
 
             val response = client.newCall(request).execute()
-            if (!response.isSuccessful) return@withContext null
+            if (!response.isSuccessful) {
+                Log.w(TAG, "GitHub API responded ${response.code} ${response.message} " +
+                           "(URL: $API_URL). Releases check skipped.")
+                response.close()
+                return@withContext null
+            }
 
             val json = JSONObject(response.body!!.string())
             val tagName = json.getString("tag_name")
             val remoteVersion = tagName.removePrefix("v")
             val currentVersion = getCurrentVersion(context)
+            Log.i(TAG, "Latest release: $remoteVersion, current: $currentVersion")
 
-            if (!isNewer(remoteVersion, currentVersion)) return@withContext null
+            if (!isNewer(remoteVersion, currentVersion)) {
+                Log.i(TAG, "No update needed ($currentVersion >= $remoteVersion)")
+                return@withContext null
+            }
 
             val body = json.optString("body", "")
             val assets = json.getJSONArray("assets")
@@ -58,22 +69,24 @@ object UpdateChecker {
                 val asset = assets.getJSONObject(i)
                 val name = asset.getString("name")
                 if (name.endsWith(".apk")) {
-                    // Прямая CDN-ссылка (публичный репо, auth не нужен).
-                    // Для приватного репо здесь нужна была бы asset.url + Bearer token —
-                    // мы от этой схемы отказались после публикации.
                     apkUrl = asset.getString("browser_download_url")
                     break
                 }
             }
 
-            if (apkUrl.isEmpty()) return@withContext null
+            if (apkUrl.isEmpty()) {
+                Log.w(TAG, "Release $remoteVersion has no .apk asset attached — skipping update")
+                return@withContext null
+            }
 
+            Log.i(TAG, "Update available: $remoteVersion at $apkUrl")
             ReleaseInfo(
                 versionName = remoteVersion,
                 releaseNotes = body,
                 apkUrl = apkUrl,
             )
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "Update check failed: ${e.message}", e)
             null
         }
     }

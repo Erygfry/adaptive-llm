@@ -1,6 +1,8 @@
 package com.example.adaptivellm.eviction
 
+import android.content.Context
 import android.util.Log
+import com.example.adaptivellm.R
 import com.example.adaptivellm.device.RamTier
 import com.example.adaptivellm.embedding.EmbeddingModel
 import com.example.adaptivellm.inference.InferenceEngine
@@ -163,6 +165,7 @@ object EvictionEngine {
      * @return true если eviction действительно прошла, false иначе.
      */
     suspend fun checkAndRun(
+        context: Context,
         chatId: Long,
         engine: InferenceEngine,
         ramTier: RamTier,
@@ -181,7 +184,7 @@ object EvictionEngine {
 
         Log.i(TAG, "Eviction triggered: chatId=$chatId, current_pos=$currentKvTokens, " +
                    "T_max=$tMax (mergeCount=$mergeCount)")
-        return runEviction(chatId, engine, ramTier, systemPrompt, snapshotBase,
+        return runEviction(context, chatId, engine, ramTier, systemPrompt, snapshotBase,
                            modelKey, nCtx, currentThinkingMode, onProgress, onTokenProgress)
     }
 
@@ -193,6 +196,7 @@ object EvictionEngine {
      * Reuses всю state machine A→D + conflict resolution из [runEvictionInternal].
      */
     suspend fun runEviction(
+        context: Context,
         chatId: Long,
         engine: InferenceEngine,
         ramTier: RamTier,
@@ -211,7 +215,7 @@ object EvictionEngine {
         ChatRepository.setEvictionState(chatId, "in_progress")
         try {
             runEvictionInternal(
-                chatId, engine, ramTier, systemPrompt, snapshotBase,
+                context, chatId, engine, ramTier, systemPrompt, snapshotBase,
                 modelKey, nCtx, currentThinkingMode, onProgress, onTokenProgress,
             )
             return true
@@ -226,6 +230,7 @@ object EvictionEngine {
     }
 
     private suspend fun runEvictionInternal(
+        context: Context,
         chatId: Long,
         engine: InferenceEngine,
         ramTier: RamTier,
@@ -273,8 +278,10 @@ object EvictionEngine {
 
         // ─── Этап B — switch context + extraction LLM call ───────────────
         val isFirstEviction = summary.mergeCount == 0
-        onProgress(if (isFirstEviction) "Анализ диалога и извлечение фактов..."
-                   else "Извлечение фактов и обновление сводки...")
+        onProgress(context.getString(
+            if (isFirstEviction) R.string.eviction_analyze_dialog
+            else R.string.eviction_extract_facts
+        ))
 
         // B.1: snapshot_base restore → KV в state [system_only]. Если Strategy B
         // (Vulkan где snapshot_base не работает) — fall back на setSystemPrompt.
@@ -365,7 +372,7 @@ object EvictionEngine {
             totalParsed = parsed.size
             for ((idx, factObj) in parsed.withIndex()) {
                 if (parsed.size > 1) {
-                    onProgress("Дедупликация фактов (${idx + 1}/${parsed.size})...")
+                    onProgress(context.getString(R.string.eviction_dedup_facts, idx + 1, parsed.size))
                 }
                 try {
                     val result = resolveAndInsertFact(
@@ -404,7 +411,10 @@ object EvictionEngine {
         // ─── Этап D — rebuild KV = [system + last-N messages] ───────────
         // Stage 6.1 упрощение: summary НЕ в system block. Stage 6.x optimization —
         // включать summary в system для cache_prompt стабильности.
-        onProgress(if (isFirstEviction) "Сохранение профиля..." else "Восстановление контекста...")
+        onProgress(context.getString(
+            if (isFirstEviction) R.string.eviction_save_profile
+            else R.string.eviction_restore_context
+        ))
 
         val baseRebuilt = snapshotBase.load(engine, systemPrompt, modelKey, nCtx)
         if (!baseRebuilt) {

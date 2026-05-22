@@ -18,7 +18,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.example.adaptivellm.R
 import com.example.adaptivellm.model.DownloadState
 
 @Composable
@@ -38,7 +40,7 @@ fun DownloadScreen(viewModel: MainViewModel) {
         verticalArrangement = Arrangement.Center,
     ) {
         Text(
-            "Downloading Model",
+            stringResource(R.string.download_title),
             style = MaterialTheme.typography.headlineMedium,
         )
 
@@ -55,7 +57,7 @@ fun DownloadScreen(viewModel: MainViewModel) {
         when (val s = state) {
             is DownloadState.Progress -> {
                 Text(
-                    "Downloading ${s.label}...",
+                    stringResource(R.string.download_progress, s.label),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -78,7 +80,7 @@ fun DownloadScreen(viewModel: MainViewModel) {
 
             is DownloadState.Error -> {
                 Text(
-                    "Error: ${s.message}",
+                    stringResource(R.string.download_error, s.message),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -86,19 +88,19 @@ fun DownloadScreen(viewModel: MainViewModel) {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Button(onClick = { viewModel.startDownload() }) {
-                    Text("Retry")
+                    Text(stringResource(R.string.download_retry))
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
                 OutlinedButton(onClick = { viewModel.navigateTo(AppScreen.Setup) }) {
-                    Text("Back to Setup")
+                    Text(stringResource(R.string.download_back_to_setup))
                 }
             }
 
             is DownloadState.Complete -> {
                 Text(
-                    "Download complete!",
+                    stringResource(R.string.download_complete),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -107,7 +109,7 @@ fun DownloadScreen(viewModel: MainViewModel) {
             null -> {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("Preparing...", style = MaterialTheme.typography.bodyLarge)
+                Text(stringResource(R.string.download_preparing), style = MaterialTheme.typography.bodyLarge)
             }
         }
     }

@@ -1,4 +1,181 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Default strings (English). Translations live in res/values-{ru,es,fr,de,zh}/strings.xml. -->
+
+    <!-- ============================================================ -->
+    <!-- Brand / app -->
+    <!-- ============================================================ -->
     <string name="app_name">LocaLLM</string>
+
+    <!-- ============================================================ -->
+    <!-- Common / shared across screens -->
+    <!-- ============================================================ -->
+    <string name="common_back">Back</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_delete">Delete</string>
+    <string name="common_close">Close</string>
+    <string name="common_loading">Loading…</string>
+    <string name="common_ready">Ready</string>
+    <string name="common_error">Error</string>
+    <string name="common_initializing">Initializing…</string>
+    <string name="common_untitled">Untitled</string>
+    <string name="common_settings">Settings</string>
+
+    <!-- ============================================================ -->
+    <!-- Setup screen -->
+    <!-- ============================================================ -->
+    <string name="setup_device_profile">Device Profile</string>
+    <string name="setup_recommended">Recommended: %1$s</string>
+    <string name="setup_available_models">Available Models</string>
+    <string name="setup_not_supported_title">Device Not Supported</string>
+    <string name="setup_not_supported_desc">This device does not have enough RAM to run any available model. At least 6 GB of RAM is required.</string>
+    <string name="setup_param_size_header">%1$s Parameters</string>
+    <string name="setup_downloaded">Downloaded</string>
+    <string name="setup_model_specs">%1$d MB · min RAM: %2$d GB</string>
+    <string name="setup_start_chat">Start Chat</string>
+    <string name="setup_download_and_start">Download &amp; Start</string>
+    <string name="setup_delete_model">Delete model</string>
+
+    <!-- ============================================================ -->
+    <!-- Download screen -->
+    <!-- ============================================================ -->
+    <string name="download_title">Downloading Model</string>
+    <string name="download_progress">Downloading %1$s…</string>
+    <string name="download_preparing">Preparing…</string>
+    <string name="download_error">Error: %1$s</string>
+    <string name="download_retry">Retry</string>
+    <string name="download_back_to_setup">Back to Setup</string>
+    <string name="download_complete">Download complete!</string>
+
+    <!-- ============================================================ -->
+    <!-- Chat screen -->
+    <!-- ============================================================ -->
+    <string name="chat_back_to_list">Back to chat list</string>
+    <string name="chat_loading">Loading chat…</string>
+    <string name="chat_loading_model">Loading model…</string>
+    <string name="chat_ready_format">Ready · %1$s%2$s</string>
+    <string name="chat_evicting_default">Compressing chat history…</string>
+    <string name="chat_creating_profile">Creating memory profile…</string>
+    <string name="chat_input_placeholder">Type a message…</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_stop_generation">Stop generation</string>
+    <string name="chat_thinking_header">Thinking</string>
+    <string name="chat_thinking_auto">Auto</string>
+    <string name="chat_thinking_always">Always</string>
+    <string name="chat_thinking_off">Off</string>
+    <string name="chat_check_for_updates">Check for updates</string>
+
+    <!-- ============================================================ -->
+    <!-- Update dialog -->
+    <!-- ============================================================ -->
+    <string name="update_available">Update available: v%1$s</string>
+    <string name="update_in_progress">Updating…</string>
+    <string name="update_downloading">Downloading: %1$d%%</string>
+    <string name="update_installing">Installing…</string>
+    <string name="update_button">Update</string>
+    <string name="update_later">Later</string>
+    <string name="update_app_up_to_date">App is up to date</string>
+
+    <!-- ============================================================ -->
+    <!-- Chat list screen -->
+    <!-- ============================================================ -->
+    <string name="chatlist_title">Chats</string>
+    <string name="chatlist_delete_title">Delete chat?</string>
+    <string name="chatlist_delete_msg">«%1$s» — all messages of this chat will be permanently deleted.</string>
+    <string name="chatlist_back_to_setup">Back to model selection</string>
+    <string name="chatlist_empty_title">No chats yet</string>
+    <string name="chatlist_empty_subtitle">Tap + to start your first conversation</string>
+    <string name="chatlist_limit_reached">Chat limit reached (%1$d)</string>
+    <string name="chatlist_new_chat">New chat</string>
+    <string name="chatlist_delete_chat">Delete chat</string>
+    <string name="chatlist_memory">Memory</string>
+
+    <!-- ============================================================ -->
+    <!-- Memory screen (saved facts) -->
+    <!-- ============================================================ -->
+    <string name="memory_title">Memory</string>
+    <string name="memory_filter_all">All</string>
+    <string name="memory_fact_id">Fact #%1$d</string>
+    <string name="memory_importance">Importance</string>
+    <string name="memory_access_count">Access count</string>
+    <string name="memory_context">Context</string>
+    <string name="memory_keywords">Keywords</string>
+    <string name="memory_created">Created</string>
+    <string name="memory_event_date">Event date</string>
+    <string name="memory_source">Source</string>
+    <string name="memory_source_local">Local to chat #%1$d</string>
+    <string name="memory_source_global">Global</string>
+    <string name="memory_empty_title">Memory is empty</string>
+    <string name="memory_empty_subtitle">Facts will appear after the first chat history compression</string>
+    <string name="memory_filter_empty_title">No facts in this category</string>
+    <string name="memory_filter_empty_subtitle">Try another category or «All»</string>
+
+    <!-- Fact categories (UI labels). DB identifiers stay English (preference/goal/…). -->
+    <string name="cat_preference">Preferences</string>
+    <string name="cat_goal">Goals</string>
+    <string name="cat_personal_info">Profile</string>
+    <string name="cat_instruction">Instructions</string>
+    <string name="cat_event">Events</string>
+    <string name="cat_relationship">Relationships</string>
+
+    <!-- ============================================================ -->
+    <!-- Settings screen -->
+    <!-- ============================================================ -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_section_theme">Theme</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_section_memory">Memory</string>
+    <string name="settings_cross_chat_label">Use facts from other chats</string>
+    <string name="settings_cross_chat_on">Model sees facts from all chats. Current-chat facts are prioritized; the rest fill the tail of Top-K.</string>
+    <string name="settings_cross_chat_off">Model sees only facts from the current chat. Full isolation between chats — useful for private topics.</string>
+    <string name="settings_section_language">Language</string>
+    <string name="settings_language_system">System</string>
+
+    <!-- ============================================================ -->
+    <!-- Eviction progress (set via SettingsRepository / EvictionEngine onProgress) -->
+    <!-- ============================================================ -->
+    <string name="eviction_analyze_dialog">Analyzing dialog and extracting facts…</string>
+    <string name="eviction_extract_facts">Extracting facts and updating summary…</string>
+    <string name="eviction_dedup_facts">Deduplicating facts (%1$d/%2$d)…</string>
+    <string name="eviction_save_profile">Saving profile…</string>
+    <string name="eviction_restore_context">Restoring context…</string>
+
+    <!-- ============================================================ -->
+    <!-- Notifications (DownloadService) -->
+    <!-- ============================================================ -->
+    <string name="notif_download_preparing">Preparing download…</string>
+    <string name="notif_download_progress">Downloading %1$s: %2$d / %3$d MB</string>
+    <string name="notif_download_complete">Model downloaded successfully</string>
+    <string name="notif_download_failed">Download failed: %1$s</string>
+
+    <!-- Chat fallback strings (used by ViewModel) -->
+    <string name="chat_default_title">Chat</string>
+    <string name="chat_cancelled_message">(message cancelled)</string>
+
+    <!-- ============================================================ -->
+    <!-- Relative time -->
+    <!-- ============================================================ -->
+    <string name="time_just_now">just now</string>
+
+    <!-- ============================================================ -->
+    <!-- Plurals -->
+    <!-- ============================================================ -->
+    <plurals name="memory_facts_count">
+        <item quantity="one">%d fact</item>
+        <item quantity="other">%d facts</item>
+    </plurals>
+    <plurals name="time_minutes_ago">
+        <item quantity="one">%d min ago</item>
+        <item quantity="other">%d min ago</item>
+    </plurals>
+    <plurals name="time_hours_ago">
+        <item quantity="one">%d hr ago</item>
+        <item quantity="other">%d hr ago</item>
+    </plurals>
+    <plurals name="time_days_ago">
+        <item quantity="one">%d day ago</item>
+        <item quantity="other">%d days ago</item>
+    </plurals>
 </resources>

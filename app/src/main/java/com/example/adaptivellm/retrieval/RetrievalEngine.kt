@@ -161,21 +161,30 @@ object RetrievalEngine {
         // current чата идёт первым, а cross-chat факты заполняют оставшиеся
         // слоты только если у них достаточно высокий score чтобы пробиться
         // через per-fact threshold выше.
+        //
+        // Stage 7 setting: если юзер отключил cross-chat в настройках —
+        // полностью игнорируем факты других чатов (полная изоляция).
         val (local, crossChat) = if (currentChatId != null) {
             passing.partition { it.fact.chatId == currentChatId }
         } else {
             // Нет current чата (необычный случай) — все факты в одной группе.
             emptyList<ScoredFact>() to passing
         }
-        val tiered = local + crossChat
+        val crossChatAllowed = com.example.adaptivellm.settings.SettingsRepository
+            .crossChatFactsEnabled.value
+        val tiered = if (crossChatAllowed) local + crossChat else local
         val topResults = tiered.take(topK)
+        // Edge case: cross-chat выключен, local пуст, но прошли threshold cross-chat
+        // факты — итог пустой. Лог корректно отражает причину.
         FactsRepository.reinforce(topResults.map { it.fact.id }, now)
 
         Log.i(TAG, "retrieveFacts: query.len=${query.length}, fts=${ftsResults.size}, " +
                    "vec=${vecResults.size}, merged=${rrfScores.size}, " +
                    "scored=${scored.size}, passing=${passing.size} " +
-                   "(local=${local.size}, cross=${crossChat.size}), " +
-                   "returned=${topResults.size}, top1_score=${topResults[0].score}")
+                   "(local=${local.size}, cross=${crossChat.size}, " +
+                   "crossAllowed=$crossChatAllowed), " +
+                   "returned=${topResults.size}, " +
+                   "top1_score=${topResults.firstOrNull()?.score ?: "n/a"}")
         return topResults
     }
 

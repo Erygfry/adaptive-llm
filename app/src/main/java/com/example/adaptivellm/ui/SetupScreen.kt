@@ -1,7 +1,6 @@
 package com.example.adaptivellm.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,8 +20,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -33,13 +30,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import com.example.adaptivellm.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.Surface
@@ -57,20 +53,25 @@ fun SetupScreen(viewModel: MainViewModel) {
     availableUpdate?.let { update ->
         AlertDialog(
             onDismissRequest = { if (updateProgress == null) viewModel.dismissUpdate() },
-            title = { Text(if (updateProgress != null) "Updating..." else "Update available: v${update.versionName}") },
+            title = {
+                Text(
+                    if (updateProgress != null) stringResource(R.string.update_in_progress)
+                    else stringResource(R.string.update_available, update.versionName)
+                )
+            },
             text = {
                 Column {
                     if (updateProgress != null) {
                         val pct = updateProgress!!
                         if (pct >= 0) {
-                            Text("Downloading: $pct%")
+                            Text(stringResource(R.string.update_downloading, pct))
                             Spacer(modifier = Modifier.height(8.dp))
                             LinearProgressIndicator(
                                 progress = { pct / 100f },
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         } else {
-                            Text("Installing...")
+                            Text(stringResource(R.string.update_installing))
                             Spacer(modifier = Modifier.height(8.dp))
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
@@ -84,7 +85,7 @@ fun SetupScreen(viewModel: MainViewModel) {
                     onClick = { viewModel.installUpdate() },
                     enabled = updateProgress == null,
                 ) {
-                    Text("Update")
+                    Text(stringResource(R.string.update_button))
                 }
             },
             dismissButton = {
@@ -92,7 +93,7 @@ fun SetupScreen(viewModel: MainViewModel) {
                     onClick = { viewModel.dismissUpdate() },
                     enabled = updateProgress == null,
                 ) {
-                    Text("Later")
+                    Text(stringResource(R.string.update_later))
                 }
             },
         )
@@ -114,42 +115,18 @@ fun SetupScreen(viewModel: MainViewModel) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = stringResource(com.example.adaptivellm.R.string.app_name),
+                text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f),
             )
 
-            // Settings menu (placeholder for future features)
-            var settingsExpanded by remember { mutableStateOf(false) }
-            Box {
-                IconButton(onClick = { settingsExpanded = true }) {
-                    Icon(
-                        Icons.Default.Settings,
-                        contentDescription = "Settings",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                DropdownMenu(
-                    expanded = settingsExpanded,
-                    onDismissRequest = { settingsExpanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Theme (coming soon)") },
-                        onClick = { settingsExpanded = false },
-                        enabled = false,
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Language (coming soon)") },
-                        onClick = { settingsExpanded = false },
-                        enabled = false,
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Advanced settings (coming soon)") },
-                        onClick = { settingsExpanded = false },
-                        enabled = false,
-                    )
-                }
+            IconButton(onClick = { viewModel.openSettings() }) {
+                Icon(
+                    Icons.Default.Settings,
+                    contentDescription = stringResource(R.string.common_settings),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 
@@ -164,7 +141,7 @@ fun SetupScreen(viewModel: MainViewModel) {
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    "Device Profile",
+                    stringResource(R.string.setup_device_profile),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -177,7 +154,7 @@ fun SetupScreen(viewModel: MainViewModel) {
 
         // Recommended model
         Text(
-            "Recommended: ${viewModel.recommendedModel.displayName}",
+            stringResource(R.string.setup_recommended, viewModel.recommendedModel.displayName),
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary,
         )
@@ -186,7 +163,7 @@ fun SetupScreen(viewModel: MainViewModel) {
 
         // Model selection
         Text(
-            "Available Models",
+            stringResource(R.string.setup_available_models),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
         )
@@ -202,15 +179,14 @@ fun SetupScreen(viewModel: MainViewModel) {
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        "Device Not Supported",
+                        stringResource(R.string.setup_not_supported_title),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onErrorContainer,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "This device does not have enough RAM to run any available model. " +
-                            "At least 6 GB of RAM is required.",
+                        stringResource(R.string.setup_not_supported_desc),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onErrorContainer,
                     )
@@ -219,7 +195,7 @@ fun SetupScreen(viewModel: MainViewModel) {
         } else {
             viewModel.compatibleModels.forEach { (size, variants) ->
                 Text(
-                    "$size Parameters",
+                    stringResource(R.string.setup_param_size_header, size),
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.padding(top = 8.dp),
                 )
@@ -242,14 +218,18 @@ fun SetupScreen(viewModel: MainViewModel) {
                                 if (isDownloaded) {
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        "Downloaded",
+                                        stringResource(R.string.setup_downloaded),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary,
                                     )
                                 }
                             }
                             Text(
-                                "${variant.fileSizeMb} MB | min RAM: ${variant.nominalMinRamGb} GB",
+                                stringResource(
+                                    R.string.setup_model_specs,
+                                    variant.fileSizeMb.toInt(),
+                                    variant.nominalMinRamGb,
+                                ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -261,7 +241,7 @@ fun SetupScreen(viewModel: MainViewModel) {
                             ) {
                                 Icon(
                                     Icons.Default.Delete,
-                                    contentDescription = "Delete model",
+                                    contentDescription = stringResource(R.string.setup_delete_model),
                                     tint = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.size(20.dp),
                                 )
@@ -278,7 +258,10 @@ fun SetupScreen(viewModel: MainViewModel) {
                 onClick = { viewModel.startDownload() },
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (isSelectedDownloaded) "Start Chat" else "Download & Start")
+                Text(stringResource(
+                    if (isSelectedDownloaded) R.string.setup_start_chat
+                    else R.string.setup_download_and_start
+                ))
             }
         }
 

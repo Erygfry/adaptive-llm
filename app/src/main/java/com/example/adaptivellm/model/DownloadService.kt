@@ -65,7 +65,8 @@ class DownloadService : Service() {
         activeFileName = variant.fileName
         _activeVariantFile.value = variant.fileName
 
-        startForeground(NOTIFICATION_ID, buildNotification("Preparing download...", 0))
+        startForeground(NOTIFICATION_ID, buildNotification(
+            getString(com.example.adaptivellm.R.string.notif_download_preparing), 0))
         _state.value = DownloadState.Progress(0, 1, "model")
 
         activeJob = scope.launch {
@@ -80,7 +81,10 @@ class DownloadService : Service() {
                             val mb = state.bytesDownloaded / (1024 * 1024)
                             val totalMb = state.totalBytes / (1024 * 1024)
                             updateNotification(
-                                "Downloading ${state.label}: $mb / $totalMb MB",
+                                getString(
+                                    com.example.adaptivellm.R.string.notif_download_progress,
+                                    state.label, mb.toInt(), totalMb.toInt(),
+                                ),
                                 percent,
                             )
                         }
@@ -152,7 +156,7 @@ class DownloadService : Service() {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle(getString(com.example.adaptivellm.R.string.app_name))
-            .setContentText("Model downloaded successfully")
+            .setContentText(getString(com.example.adaptivellm.R.string.notif_download_complete))
             .setAutoCancel(true)
             .build()
         nm.notify(NOTIFICATION_ID, notification)
@@ -163,7 +167,7 @@ class DownloadService : Service() {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentTitle(getString(com.example.adaptivellm.R.string.app_name))
-            .setContentText("Download failed: $error")
+            .setContentText(getString(com.example.adaptivellm.R.string.notif_download_failed, error))
             .setAutoCancel(true)
             .build()
         nm.notify(NOTIFICATION_ID, notification)

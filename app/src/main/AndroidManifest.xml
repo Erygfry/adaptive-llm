@@ -13,7 +13,8 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AdaptiveLLM"
         android:largeHeap="true"
-        android:extractNativeLibs="true">
+        android:extractNativeLibs="true"
+        android:localeConfig="@xml/locales_config">
 
         <activity
             android:name=".MainActivity"
@@ -38,6 +39,22 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!--
+            AppCompatDelegate per-app locales storage. На Android < 13 хранит
+            выбранный язык в SharedPreferences и применяет на старте процесса.
+            Required потому что MainActivity = ComponentActivity (не AppCompatActivity),
+            без этого сервиса setApplicationLocales — no-op для ComponentActivity.
+            См. https://developer.android.com/guide/topics/resources/app-languages
+        -->
+        <service
+            android:name="androidx.appcompat.app.AppLocalesMetadataHolderService"
+            android:enabled="false"
+            android:exported="false">
+            <meta-data
+                android:name="autoStoreLocales"
+                android:value="true" />
+        </service>
 
     </application>
 

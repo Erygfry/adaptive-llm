@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -40,8 +41,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.adaptivellm.R
 import com.example.adaptivellm.inference.InferenceEngine
 import com.example.adaptivellm.storage.ChatRepository
 import java.text.SimpleDateFormat
@@ -59,15 +63,11 @@ fun ChatListScreen(viewModel: MainViewModel) {
     // Confirmation dialog для удаления
     var pendingDelete by remember { mutableStateOf<ChatRepository.ChatInfo?>(null) }
     pendingDelete?.let { chat ->
+        val title = chat.title?.ifBlank { null } ?: stringResource(R.string.common_untitled)
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("Удалить чат?") },
-            text = {
-                Text(
-                    "«${chat.title ?: "Без названия"}» — все сообщения этого чата " +
-                    "будут удалены безвозвратно."
-                )
-            },
+            title = { Text(stringResource(R.string.chatlist_delete_title)) },
+            text = { Text(stringResource(R.string.chatlist_delete_msg, title)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -75,12 +75,12 @@ fun ChatListScreen(viewModel: MainViewModel) {
                         pendingDelete = null
                     }
                 ) {
-                    Text("Удалить", color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) {
-                    Text("Отмена")
+                    Text(stringResource(R.string.common_cancel))
                 }
             },
         )
@@ -93,14 +93,17 @@ fun ChatListScreen(viewModel: MainViewModel) {
                     IconButton(onClick = { viewModel.goBackToSetup() }) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Назад к выбору модели",
+                            contentDescription = stringResource(R.string.chatlist_back_to_setup),
                         )
                     }
                 },
                 title = {
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Чаты", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                stringResource(R.string.chatlist_title),
+                                style = MaterialTheme.typography.titleMedium,
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
                             val atLimit = chats.size >= MainViewModel.MAX_CHATS
                             Text(
@@ -113,10 +116,10 @@ fun ChatListScreen(viewModel: MainViewModel) {
                             )
                         }
                         val status = when (engineState) {
-                            is InferenceEngine.State.LoadingModel -> "Загрузка модели..."
-                            is InferenceEngine.State.ModelLoaded -> loadedModelName.ifBlank { "Готов" }
-                            is InferenceEngine.State.Error -> "Ошибка"
-                            else -> "Инициализация..."
+                            is InferenceEngine.State.LoadingModel -> stringResource(R.string.chat_loading_model)
+                            is InferenceEngine.State.ModelLoaded -> loadedModelName.ifBlank { stringResource(R.string.common_ready) }
+                            is InferenceEngine.State.Error -> stringResource(R.string.common_error)
+                            else -> stringResource(R.string.common_initializing)
                         }
                         Text(
                             status,
@@ -130,7 +133,15 @@ fun ChatListScreen(viewModel: MainViewModel) {
                     IconButton(onClick = { viewModel.openFactsMemory() }) {
                         Icon(
                             MemoryLibraryIcon,
-                            contentDescription = "Память",
+                            contentDescription = stringResource(R.string.chatlist_memory),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    // Stage 7 — Настройки
+                    IconButton(onClick = { viewModel.openSettings() }) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.common_settings),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -159,9 +170,9 @@ fun ChatListScreen(viewModel: MainViewModel) {
                 Icon(
                     Icons.Default.Add,
                     contentDescription = if (atLimit)
-                        "Достигнут лимит чатов (${MainViewModel.MAX_CHATS})"
+                        stringResource(R.string.chatlist_limit_reached, MainViewModel.MAX_CHATS)
                     else
-                        "Новый чат",
+                        stringResource(R.string.chatlist_new_chat),
                     tint = if (canCreate)
                         MaterialTheme.colorScheme.onPrimaryContainer
                     else
@@ -181,13 +192,13 @@ fun ChatListScreen(viewModel: MainViewModel) {
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        "У вас пока нет чатов",
+                        stringResource(R.string.chatlist_empty_title),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "Нажмите + чтобы начать первый разговор",
+                        stringResource(R.string.chatlist_empty_subtitle),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -235,7 +246,7 @@ private fun ChatListItem(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = chat.title?.ifBlank { null } ?: "Без названия",
+                text = chat.title?.ifBlank { null } ?: stringResource(R.string.common_untitled),
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -255,7 +266,7 @@ private fun ChatListItem(
         ) {
             Icon(
                 Icons.Default.Delete,
-                contentDescription = "Удалить чат",
+                contentDescription = stringResource(R.string.chatlist_delete_chat),
                 tint = MaterialTheme.colorScheme.error.copy(alpha = if (enabled) 0.7f else 0.3f),
                 modifier = Modifier.size(20.dp),
             )
@@ -264,18 +275,19 @@ private fun ChatListItem(
 }
 
 /**
- * Простое форматирование "last active": если меньше минуты — "только что",
- * меньше часа — "N мин назад", сегодня — "HH:mm", иначе — "dd.MM.yyyy".
- *
- * Для MVP — простая логика; на Stage 9 polish можно прикрутить локализацию и
- * множественные формы (1 минута, 2 минуты, 5 минут и т.д.).
+ * Локализованное форматирование "last active" через Android plurals.
+ * @Composable нужен для `pluralStringResource`.
  */
+@Composable
 private fun formatRelativeTime(unixSec: Long): String {
     val now = System.currentTimeMillis() / 1000L
     val diff = now - unixSec
     return when {
-        diff < 60 -> "только что"
-        diff < 3600 -> "${diff / 60} мин назад"
+        diff < 60 -> stringResource(R.string.time_just_now)
+        diff < 3600 -> {
+            val n = (diff / 60).toInt()
+            pluralStringResource(R.plurals.time_minutes_ago, n, n)
+        }
         diff < 86400 -> SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(unixSec * 1000L))
         else -> SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date(unixSec * 1000L))
     }

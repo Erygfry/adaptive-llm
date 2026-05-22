@@ -4,8 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -57,10 +57,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.unit.dp
+import com.example.adaptivellm.R
 import com.example.adaptivellm.inference.InferenceEngine
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,11 +84,12 @@ fun ChatScreen(viewModel: MainViewModel) {
     val updateCheckState by viewModel.updateCheckState.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
+    val upToDateMessage = stringResource(R.string.update_app_up_to_date)
 
     // Show snackbar when update check completes with no update
     LaunchedEffect(updateCheckState) {
         if (updateCheckState == false) {
-            snackbarHostState.showSnackbar("App is up to date")
+            snackbarHostState.showSnackbar(upToDateMessage)
         }
     }
 
@@ -95,20 +98,25 @@ fun ChatScreen(viewModel: MainViewModel) {
     availableUpdate?.let { update ->
         AlertDialog(
             onDismissRequest = { if (updateProgress == null) viewModel.dismissUpdate() },
-            title = { Text(if (updateProgress != null) "Updating..." else "Update available: v${update.versionName}") },
+            title = {
+                Text(
+                    if (updateProgress != null) stringResource(R.string.update_in_progress)
+                    else stringResource(R.string.update_available, update.versionName)
+                )
+            },
             text = {
                 Column {
                     if (updateProgress != null) {
                         val pct = updateProgress!!
                         if (pct >= 0) {
-                            Text("Downloading: $pct%")
+                            Text(stringResource(R.string.update_downloading, pct))
                             Spacer(modifier = Modifier.height(8.dp))
                             LinearProgressIndicator(
                                 progress = { pct / 100f },
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         } else {
-                            Text("Installing...")
+                            Text(stringResource(R.string.update_installing))
                             Spacer(modifier = Modifier.height(8.dp))
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
@@ -122,7 +130,7 @@ fun ChatScreen(viewModel: MainViewModel) {
                     onClick = { viewModel.installUpdate() },
                     enabled = updateProgress == null,
                 ) {
-                    Text("Update")
+                    Text(stringResource(R.string.update_button))
                 }
             },
             dismissButton = {
@@ -130,7 +138,7 @@ fun ChatScreen(viewModel: MainViewModel) {
                     onClick = { viewModel.dismissUpdate() },
                     enabled = updateProgress == null,
                 ) {
-                    Text("Later")
+                    Text(stringResource(R.string.update_later))
                 }
             },
         )
@@ -157,25 +165,25 @@ fun ChatScreen(viewModel: MainViewModel) {
                     ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Назад к списку чатов",
+                            contentDescription = stringResource(R.string.chat_back_to_list),
                         )
                     }
                 },
                 title = {
                     Column {
                         Text(
-                            loadedModelName.ifEmpty { "Loading..." },
+                            loadedModelName.ifEmpty { stringResource(R.string.common_loading) },
                             style = MaterialTheme.typography.titleMedium,
                         )
-                        val tokenInfo = if (totalTokens > 0) " | $totalTokens/${viewModel.nCtx}" else ""
+                        val tokenInfo = if (totalTokens > 0) " · $totalTokens/${viewModel.nCtx}" else ""
                         val statusText = when {
-                            isEvicting -> evictionStatus.ifBlank { "Сжатие истории чата..." }
-                            isSwitchingChat -> "Загрузка чата..."
-                            engineState is InferenceEngine.State.LoadingModel -> "Loading model..."
-                            engineState is InferenceEngine.State.Generating -> "%.1f t/s | %s%s".format(tps, backend, tokenInfo)
-                            engineState is InferenceEngine.State.ModelLoaded -> "Ready | %s%s".format(backend, tokenInfo)
-                            engineState is InferenceEngine.State.Error -> "Error"
-                            else -> "Initializing..."
+                            isEvicting -> evictionStatus.ifBlank { stringResource(R.string.chat_evicting_default) }
+                            isSwitchingChat -> stringResource(R.string.chat_loading)
+                            engineState is InferenceEngine.State.LoadingModel -> stringResource(R.string.chat_loading_model)
+                            engineState is InferenceEngine.State.Generating -> "%.1f t/s · %s%s".format(tps, backend, tokenInfo)
+                            engineState is InferenceEngine.State.ModelLoaded -> stringResource(R.string.chat_ready_format, backend, tokenInfo)
+                            engineState is InferenceEngine.State.Error -> stringResource(R.string.common_error)
+                            else -> stringResource(R.string.common_initializing)
                         }
                         Text(
                             statusText,
@@ -240,7 +248,7 @@ fun ChatScreen(viewModel: MainViewModel) {
                     value = inputText,
                     onValueChange = { inputText = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Type a message...") },
+                    placeholder = { Text(stringResource(R.string.chat_input_placeholder)) },
                     enabled = engineState is InferenceEngine.State.ModelLoaded &&
                               !isGenerating && !isSwitchingChat && !isEvicting,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -265,7 +273,7 @@ fun ChatScreen(viewModel: MainViewModel) {
                     ) {
                         Icon(
                             Icons.Default.Settings,
-                            contentDescription = "Settings",
+                            contentDescription = stringResource(R.string.common_settings),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -275,12 +283,16 @@ fun ChatScreen(viewModel: MainViewModel) {
                     ) {
                         // Section: Thinking
                         Text(
-                            text = "Thinking",
+                            text = stringResource(R.string.chat_thinking_header),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                         )
-                        val thinkingLabels = listOf("Auto", "Always", "Off")
+                        val thinkingLabels = listOf(
+                            stringResource(R.string.chat_thinking_auto),
+                            stringResource(R.string.chat_thinking_always),
+                            stringResource(R.string.chat_thinking_off),
+                        )
                         thinkingLabels.forEachIndexed { index, label ->
                             DropdownMenuItem(
                                 text = {
@@ -302,7 +314,7 @@ fun ChatScreen(viewModel: MainViewModel) {
                         // Update check
                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         DropdownMenuItem(
-                            text = { Text("Check for updates") },
+                            text = { Text(stringResource(R.string.chat_check_for_updates)) },
                             onClick = {
                                 viewModel.checkForUpdates()
                                 menuExpanded = false
@@ -317,7 +329,7 @@ fun ChatScreen(viewModel: MainViewModel) {
                     IconButton(onClick = { viewModel.stopGeneration() }) {
                         Icon(
                             Icons.Default.Close,
-                            contentDescription = "Stop generation",
+                            contentDescription = stringResource(R.string.chat_stop_generation),
                             tint = MaterialTheme.colorScheme.error,
                         )
                     }
@@ -334,8 +346,8 @@ fun ChatScreen(viewModel: MainViewModel) {
                                 !isSwitchingChat && !isEvicting,
                     ) {
                         Icon(
-                            Icons.Default.Send,
-                            contentDescription = "Send",
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = stringResource(R.string.chat_send),
                             tint = MaterialTheme.colorScheme.primary,
                         )
                     }
@@ -346,6 +358,7 @@ fun ChatScreen(viewModel: MainViewModel) {
 }
 
 @Composable
+@Suppress("DEPRECATION") // LocalClipboard миграция на suspend API — отдельная задача
 private fun MessageBubble(message: ChatMessage, isStreaming: Boolean = false) {
     val clipboardManager = LocalClipboardManager.current
 

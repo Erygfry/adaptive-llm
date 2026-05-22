@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- German translations -->
+
+    <string name="app_name">LocaLLM</string>
+
+    <!-- Common -->
+    <string name="common_back">Zurück</string>
+    <string name="common_cancel">Abbrechen</string>
+    <string name="common_delete">Löschen</string>
+    <string name="common_close">Schließen</string>
+    <string name="common_loading">Wird geladen…</string>
+    <string name="common_ready">Bereit</string>
+    <string name="common_error">Fehler</string>
+    <string name="common_initializing">Initialisierung…</string>
+    <string name="common_untitled">Ohne Titel</string>
+    <string name="common_settings">Einstellungen</string>
+
+    <!-- Setup -->
+    <string name="setup_device_profile">Geräteprofil</string>
+    <string name="setup_recommended">Empfohlen: %1$s</string>
+    <string name="setup_available_models">Verfügbare Modelle</string>
+    <string name="setup_not_supported_title">Gerät nicht unterstützt</string>
+    <string name="setup_not_supported_desc">Dieses Gerät hat nicht genug RAM, um ein verfügbares Modell auszuführen. Mindestens 6 GB RAM erforderlich.</string>
+    <string name="setup_param_size_header">%1$s Parameter</string>
+    <string name="setup_downloaded">Geladen</string>
+    <string name="setup_model_specs">%1$d MB · min. RAM: %2$d GB</string>
+    <string name="setup_start_chat">Chat starten</string>
+    <string name="setup_download_and_start">Laden &amp; starten</string>
+    <string name="setup_delete_model">Modell löschen</string>
+
+    <!-- Download -->
+    <string name="download_title">Modell wird geladen</string>
+    <string name="download_progress">%1$s wird geladen…</string>
+    <string name="download_preparing">Vorbereitung…</string>
+    <string name="download_error">Fehler: %1$s</string>
+    <string name="download_retry">Wiederholen</string>
+    <string name="download_back_to_setup">Zurück zur Einrichtung</string>
+    <string name="download_complete">Download abgeschlossen!</string>
+
+    <!-- Chat -->
+    <string name="chat_back_to_list">Zurück zur Chatliste</string>
+    <string name="chat_loading">Chat wird geladen…</string>
+    <string name="chat_loading_model">Modell wird geladen…</string>
+    <string name="chat_ready_format">Bereit · %1$s%2$s</string>
+    <string name="chat_evicting_default">Chatverlauf wird komprimiert…</string>
+    <string name="chat_creating_profile">Speicherprofil wird erstellt…</string>
+    <string name="chat_input_placeholder">Nachricht eingeben…</string>
+    <string name="chat_send">Senden</string>
+    <string name="chat_stop_generation">Generierung stoppen</string>
+    <string name="chat_thinking_header">Denken</string>
+    <string name="chat_thinking_auto">Auto</string>
+    <string name="chat_thinking_always">Immer</string>
+    <string name="chat_thinking_off">Aus</string>
+    <string name="chat_check_for_updates">Nach Updates suchen</string>
+
+    <!-- Update dialog -->
+    <string name="update_available">Update verfügbar: v%1$s</string>
+    <string name="update_in_progress">Wird aktualisiert…</string>
+    <string name="update_downloading">Wird geladen: %1$d%%</string>
+    <string name="update_installing">Installation…</string>
+    <string name="update_button">Aktualisieren</string>
+    <string name="update_later">Später</string>
+    <string name="update_app_up_to_date">App ist aktuell</string>
+
+    <!-- Chat list -->
+    <string name="chatlist_title">Chats</string>
+    <string name="chatlist_delete_title">Chat löschen?</string>
+    <string name="chatlist_delete_msg">„%1$s" — alle Nachrichten dieses Chats werden unwiderruflich gelöscht.</string>
+    <string name="chatlist_back_to_setup">Zurück zur Modellauswahl</string>
+    <string name="chatlist_empty_title">Noch keine Chats</string>
+    <string name="chatlist_empty_subtitle">Tippen Sie auf +, um Ihr erstes Gespräch zu beginnen</string>
+    <string name="chatlist_limit_reached">Chat-Limit erreicht (%1$d)</string>
+    <string name="chatlist_new_chat">Neuer Chat</string>
+    <string name="chatlist_delete_chat">Chat löschen</string>
+    <string name="chatlist_memory">Speicher</string>
+
+    <!-- Memory screen -->
+    <string name="memory_title">Speicher</string>
+    <string name="memory_filter_all">Alle</string>
+    <string name="memory_fact_id">Fakt Nr. %1$d</string>
+    <string name="memory_importance">Wichtigkeit</string>
+    <string name="memory_access_count">Zugriffe</string>
+    <string name="memory_context">Kontext</string>
+    <string name="memory_keywords">Stichwörter</string>
+    <string name="memory_created">Erstellt</string>
+    <string name="memory_event_date">Ereignisdatum</string>
+    <string name="memory_source">Quelle</string>
+    <string name="memory_source_local">Aus Chat Nr. %1$d</string>
+    <string name="memory_source_global">Global</string>
+    <string name="memory_empty_title">Speicher ist leer</string>
+    <string name="memory_empty_subtitle">Fakten erscheinen nach der ersten Verlaufskomprimierung</string>
+    <string name="memory_filter_empty_title">Keine Fakten in dieser Kategorie</string>
+    <string name="memory_filter_empty_subtitle">Probieren Sie eine andere Kategorie oder „Alle"</string>
+
+    <!-- Categories -->
+    <string name="cat_preference">Vorlieben</string>
+    <string name="cat_goal">Ziele</string>
+    <string name="cat_personal_info">Profil</string>
+    <string name="cat_instruction">Anweisungen</string>
+    <string name="cat_event">Ereignisse</string>
+    <string name="cat_relationship">Beziehungen</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Einstellungen</string>
+    <string name="settings_section_theme">Design</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_light">Hell</string>
+    <string name="settings_theme_dark">Dunkel</string>
+    <string name="settings_section_memory">Speicher</string>
+    <string name="settings_cross_chat_label">Fakten aus anderen Chats verwenden</string>
+    <string name="settings_cross_chat_on">Das Modell sieht Fakten aus allen Chats. Fakten des aktuellen Chats haben Priorität; die übrigen füllen das Ende von Top-K.</string>
+    <string name="settings_cross_chat_off">Das Modell sieht nur Fakten des aktuellen Chats. Vollständige Isolation zwischen Chats — nützlich für private Themen.</string>
+    <string name="settings_section_language">Sprache</string>
+    <string name="settings_language_system">System</string>
+
+    <!-- Eviction progress -->
+    <string name="eviction_analyze_dialog">Dialog wird analysiert, Fakten werden extrahiert…</string>
+    <string name="eviction_extract_facts">Fakten werden extrahiert, Zusammenfassung aktualisiert…</string>
+    <string name="eviction_dedup_facts">Fakten-Deduplizierung (%1$d/%2$d)…</string>
+    <string name="eviction_save_profile">Profil wird gespeichert…</string>
+    <string name="eviction_restore_context">Kontext wird wiederhergestellt…</string>
+
+    <!-- Notifications -->
+    <string name="notif_download_preparing">Download wird vorbereitet…</string>
+    <string name="notif_download_progress">%1$s wird geladen: %2$d / %3$d MB</string>
+    <string name="notif_download_complete">Modell erfolgreich geladen</string>
+    <string name="notif_download_failed">Download fehlgeschlagen: %1$s</string>
+
+    <!-- Chat fallback strings -->
+    <string name="chat_default_title">Chat</string>
+    <string name="chat_cancelled_message">(Nachricht abgebrochen)</string>
+
+    <!-- Relative time -->
+    <string name="time_just_now">gerade eben</string>
+
+    <plurals name="memory_facts_count">
+        <item quantity="one">%d Fakt</item>
+        <item quantity="other">%d Fakten</item>
+    </plurals>
+    <plurals name="time_minutes_ago">
+        <item quantity="one">vor %d Min.</item>
+        <item quantity="other">vor %d Min.</item>
+    </plurals>
+    <plurals name="time_hours_ago">
+        <item quantity="one">vor %d Std.</item>
+        <item quantity="other">vor %d Std.</item>
+    </plurals>
+    <plurals name="time_days_ago">
+        <item quantity="one">vor %d Tag</item>
+        <item quantity="other">vor %d Tagen</item>
+    </plurals>
+</resources>

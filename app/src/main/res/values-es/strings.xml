@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Spanish translations -->
+
+    <string name="app_name">LocaLLM</string>
+
+    <!-- Common -->
+    <string name="common_back">Atrás</string>
+    <string name="common_cancel">Cancelar</string>
+    <string name="common_delete">Eliminar</string>
+    <string name="common_close">Cerrar</string>
+    <string name="common_loading">Cargando…</string>
+    <string name="common_ready">Listo</string>
+    <string name="common_error">Error</string>
+    <string name="common_initializing">Inicializando…</string>
+    <string name="common_untitled">Sin título</string>
+    <string name="common_settings">Ajustes</string>
+
+    <!-- Setup -->
+    <string name="setup_device_profile">Perfil del dispositivo</string>
+    <string name="setup_recommended">Recomendado: %1$s</string>
+    <string name="setup_available_models">Modelos disponibles</string>
+    <string name="setup_not_supported_title">Dispositivo no compatible</string>
+    <string name="setup_not_supported_desc">Este dispositivo no tiene suficiente RAM para ejecutar ningún modelo disponible. Se requieren al menos 6 GB de RAM.</string>
+    <string name="setup_param_size_header">%1$s parámetros</string>
+    <string name="setup_downloaded">Descargado</string>
+    <string name="setup_model_specs">%1$d MB · RAM mín.: %2$d GB</string>
+    <string name="setup_start_chat">Iniciar chat</string>
+    <string name="setup_download_and_start">Descargar e iniciar</string>
+    <string name="setup_delete_model">Eliminar modelo</string>
+
+    <!-- Download -->
+    <string name="download_title">Descargando modelo</string>
+    <string name="download_progress">Descargando %1$s…</string>
+    <string name="download_preparing">Preparando…</string>
+    <string name="download_error">Error: %1$s</string>
+    <string name="download_retry">Reintentar</string>
+    <string name="download_back_to_setup">Volver a la configuración</string>
+    <string name="download_complete">¡Descarga completa!</string>
+
+    <!-- Chat -->
+    <string name="chat_back_to_list">Volver a la lista de chats</string>
+    <string name="chat_loading">Cargando chat…</string>
+    <string name="chat_loading_model">Cargando modelo…</string>
+    <string name="chat_ready_format">Listo · %1$s%2$s</string>
+    <string name="chat_evicting_default">Comprimiendo historial del chat…</string>
+    <string name="chat_creating_profile">Creando perfil de memoria…</string>
+    <string name="chat_input_placeholder">Escribe un mensaje…</string>
+    <string name="chat_send">Enviar</string>
+    <string name="chat_stop_generation">Detener generación</string>
+    <string name="chat_thinking_header">Razonamiento</string>
+    <string name="chat_thinking_auto">Auto</string>
+    <string name="chat_thinking_always">Siempre</string>
+    <string name="chat_thinking_off">Desactivado</string>
+    <string name="chat_check_for_updates">Buscar actualizaciones</string>
+
+    <!-- Update dialog -->
+    <string name="update_available">Actualización disponible: v%1$s</string>
+    <string name="update_in_progress">Actualizando…</string>
+    <string name="update_downloading">Descargando: %1$d%%</string>
+    <string name="update_installing">Instalando…</string>
+    <string name="update_button">Actualizar</string>
+    <string name="update_later">Más tarde</string>
+    <string name="update_app_up_to_date">La aplicación está actualizada</string>
+
+    <!-- Chat list -->
+    <string name="chatlist_title">Chats</string>
+    <string name="chatlist_delete_title">¿Eliminar chat?</string>
+    <string name="chatlist_delete_msg">«%1$s» — todos los mensajes de este chat se eliminarán permanentemente.</string>
+    <string name="chatlist_back_to_setup">Volver a la selección de modelo</string>
+    <string name="chatlist_empty_title">Aún no hay chats</string>
+    <string name="chatlist_empty_subtitle">Toca + para iniciar tu primera conversación</string>
+    <string name="chatlist_limit_reached">Límite de chats alcanzado (%1$d)</string>
+    <string name="chatlist_new_chat">Nuevo chat</string>
+    <string name="chatlist_delete_chat">Eliminar chat</string>
+    <string name="chatlist_memory">Memoria</string>
+
+    <!-- Memory screen -->
+    <string name="memory_title">Memoria</string>
+    <string name="memory_filter_all">Todos</string>
+    <string name="memory_fact_id">Hecho n.º %1$d</string>
+    <string name="memory_importance">Importancia</string>
+    <string name="memory_access_count">Accesos</string>
+    <string name="memory_context">Contexto</string>
+    <string name="memory_keywords">Palabras clave</string>
+    <string name="memory_created">Creado</string>
+    <string name="memory_event_date">Fecha del evento</string>
+    <string name="memory_source">Origen</string>
+    <string name="memory_source_local">Del chat n.º %1$d</string>
+    <string name="memory_source_global">Global</string>
+    <string name="memory_empty_title">La memoria está vacía</string>
+    <string name="memory_empty_subtitle">Los hechos aparecerán tras la primera compresión del historial</string>
+    <string name="memory_filter_empty_title">No hay hechos en esta categoría</string>
+    <string name="memory_filter_empty_subtitle">Prueba con otra categoría o «Todos»</string>
+
+    <!-- Categories -->
+    <string name="cat_preference">Preferencias</string>
+    <string name="cat_goal">Objetivos</string>
+    <string name="cat_personal_info">Perfil</string>
+    <string name="cat_instruction">Instrucciones</string>
+    <string name="cat_event">Eventos</string>
+    <string name="cat_relationship">Relaciones</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Ajustes</string>
+    <string name="settings_section_theme">Tema</string>
+    <string name="settings_theme_system">Sistema</string>
+    <string name="settings_theme_light">Claro</string>
+    <string name="settings_theme_dark">Oscuro</string>
+    <string name="settings_section_memory">Memoria</string>
+    <string name="settings_cross_chat_label">Usar hechos de otros chats</string>
+    <string name="settings_cross_chat_on">El modelo ve hechos de todos los chats. Los del chat actual tienen prioridad; el resto rellena la cola de Top-K.</string>
+    <string name="settings_cross_chat_off">El modelo solo ve los hechos del chat actual. Aislamiento total entre chats — útil para temas privados.</string>
+    <string name="settings_section_language">Idioma</string>
+    <string name="settings_language_system">Sistema</string>
+
+    <!-- Eviction progress -->
+    <string name="eviction_analyze_dialog">Analizando diálogo y extrayendo hechos…</string>
+    <string name="eviction_extract_facts">Extrayendo hechos y actualizando resumen…</string>
+    <string name="eviction_dedup_facts">Deduplicando hechos (%1$d/%2$d)…</string>
+    <string name="eviction_save_profile">Guardando perfil…</string>
+    <string name="eviction_restore_context">Restaurando contexto…</string>
+
+    <!-- Notifications -->
+    <string name="notif_download_preparing">Preparando descarga…</string>
+    <string name="notif_download_progress">Descargando %1$s: %2$d / %3$d MB</string>
+    <string name="notif_download_complete">Modelo descargado correctamente</string>
+    <string name="notif_download_failed">Error de descarga: %1$s</string>
+
+    <!-- Chat fallback strings -->
+    <string name="chat_default_title">Chat</string>
+    <string name="chat_cancelled_message">(mensaje cancelado)</string>
+
+    <!-- Relative time -->
+    <string name="time_just_now">justo ahora</string>
+
+    <plurals name="memory_facts_count">
+        <item quantity="one">%d hecho</item>
+        <item quantity="other">%d hechos</item>
+    </plurals>
+    <plurals name="time_minutes_ago">
+        <item quantity="one">hace %d min</item>
+        <item quantity="other">hace %d min</item>
+    </plurals>
+    <plurals name="time_hours_ago">
+        <item quantity="one">hace %d h</item>
+        <item quantity="other">hace %d h</item>
+    </plurals>
+    <plurals name="time_days_ago">
+        <item quantity="one">hace %d día</item>
+        <item quantity="other">hace %d días</item>
+    </plurals>
+</resources>

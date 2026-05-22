@@ -59,16 +59,86 @@ Rules:
 - Convert relative dates to absolute (today is $today)
 - Skip greetings, small talk, "ok", "thanks", general questions
 - Each fact must be self-contained and understandable without context
-- Pay SPECIAL attention to user instructions about communication style —
-  extract these with category "instruction" and importance 9-10
+
+Categories — pick exactly one per fact. Read definitions carefully:
+
+  personal_info — Stable identity facts about the user (location, occupation,
+                  age, family situation). Things that ARE TRUE about who they are.
+                  Examples: "User lives in Moscow.", "User is a software engineer."
+
+  preference    — What the user LIKES, dislikes, or prefers. Tastes and tendencies,
+                  NOT commands to the assistant.
+                  Examples: "User prefers tea over coffee.",
+                            "User likes concise explanations." [NOT instruction!]
+
+  goal          — What the user wants to achieve or is actively working on.
+                  Examples: "User is learning Spanish.",
+                            "User wants to visit Japan in 2026."
+
+  event         — A specific dated occurrence (past or future). event_date REQUIRED.
+                  Examples: "User defends diploma on 2026-06-15.",
+                            "Flight to Tokyo on 2026-05-25."
+
+  relationship  — User's connection with another named person.
+                  Examples: "User's daughter Anna is 7 years old.",
+                            "User's colleague Maria works at Google."
+
+  instruction   — VERY NARROW. ONLY explicit commands the user gave about HOW
+                  THE ASSISTANT MUST BEHAVE. Behavioral rules, not facts.
+                  VALID examples:
+                    - "Always respond in English."
+                    - "Don't use emojis."
+                    - "Be brief, no long explanations."
+                    - "Address me formally with 'вы'."
+                  INVALID (these belong in OTHER categories):
+                    - "User likes brief responses." → preference
+                    - "User mentioned working in Python." → skip, not a fact
+                    - "User lives in Berlin." → personal_info
+                  Rule of thumb: if the user said "do X" / "don't do Y" /
+                  "always/never do Z" to the assistant — it's instruction.
+                  Everything else describing the user — is NOT instruction.
 
 For each fact provide:
 - content: the atomic fact statement
 - keywords: 3-5 search keywords
 - context: brief description of WHY this fact matters and how it relates to the situation
 - category: one of personal_info | preference | goal | instruction | event | relationship
-- importance: 1-10
+- importance: integer 1-10 — calibrate using the rubric below
 - event_date: ISO date "YYYY-MM-DD" if category is "event" AND a specific date is mentioned in content. Otherwise null.
+
+Importance rubric — anchor against these levels, DO NOT default everything to 9-10:
+
+  1-2  Trivia / passing mentions. Forgettable. Casual remarks barely worth storing.
+       Examples: "User mentioned the weather is nice today." (preference, importance: 2)
+                 "User briefly said they tried sushi once." (preference, importance: 2)
+
+  3-4  Background information. Mildly useful context but rarely actionable.
+       Examples: "User sometimes uses Android phones." (preference, importance: 3)
+                 "User has visited Paris before." (event without date, importance: 4)
+
+  5-6  Standard everyday facts. Useful for personalization but not critical.
+       Default level for typical facts when uncertain.
+       Examples: "User enjoys reading sci-fi books." (preference, importance: 5)
+                 "User commutes by bike." (personal_info, importance: 5)
+                 "User is learning Kotlin." (goal, importance: 6)
+
+  7-8  Important stable facts. Affect how the assistant should help long-term.
+       Examples: "User is a software engineer." (personal_info, importance: 7)
+                 "User lives in Moscow." (personal_info, importance: 7)
+                 "User is writing a master's thesis on LLMs." (goal, importance: 8)
+
+  9-10 Critical / time-sensitive / explicit behavior commands.
+       Examples: "User defends diploma on 2026-06-15." (event, importance: 9)
+                 "User flies to Tokyo on 2026-05-25." (event, importance: 10 if soon)
+                 "Always respond in English." (instruction, importance: 10)
+                 "Don't use emojis." (instruction, importance: 9)
+
+Calibration tips:
+- Most facts should land in 4-7 range. If you're tempted to give 9-10 to everything
+  — re-read the rubric. Reserve 9-10 for facts that genuinely require urgent
+  attention or are explicit instructions.
+- A user's "favorite color" is a 4-5, NOT a 9.
+- A user being "interested in some topic" is a 4-6, NOT a 9.
 
 Return JSON:
 {

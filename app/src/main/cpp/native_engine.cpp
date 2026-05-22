@@ -408,8 +408,13 @@ static void recreate_sampler(const std::string &grammar)
     }
     common_params_sampling sparams;
     sparams.temp = DEFAULT_TEMP;
-    sparams.penalty_repeat = 1.1f;
-    sparams.penalty_last_n = 64;
+    // Anti-loop tuning (2026-05-20): thinking-mode иногда уходил в rumination
+    // spiral на 500-1000+ токенов с повторами «Wait, let me check...» и не
+    // эмитил </think>. Шире окно штрафа + чуть жёстче коэффициент + min_p
+    // фокусирует sampling — модель чаще приходит к финальному ответу.
+    sparams.penalty_repeat = 1.15f;
+    sparams.penalty_last_n = 256;
+    sparams.min_p = 0.05f;
     if (!grammar.empty()) {
         // common_grammar — struct {type, grammar_string}. User-provided GBNF =
         // COMMON_GRAMMAR_TYPE_USER (vs OUTPUT_FORMAT для JSON schemas или

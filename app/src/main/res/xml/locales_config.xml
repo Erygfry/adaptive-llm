@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Per-app supported locales. Используется Android 13+ system-level locale picker
+    (Settings → Apps → LocaLLM → Language) и AppCompatDelegate fallback на старых
+    версиях через AppLocalesMetadataHolderService.
+-->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="en" />
+    <locale android:name="ru" />
+    <locale android:name="es" />
+    <locale android:name="fr" />
+    <locale android:name="de" />
+    <locale android:name="zh" />
+</locale-config>

@@ -44,8 +44,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.adaptivellm.R
 import com.example.adaptivellm.storage.FactsRepository
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -76,15 +79,18 @@ fun FactsMemoryScreen(viewModel: MainViewModel) {
                     IconButton(onClick = { viewModel.navigateTo(AppScreen.ChatList) }) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Назад",
+                            contentDescription = stringResource(R.string.common_back),
                         )
                     }
                 },
                 title = {
                     Column {
-                        Text("Память", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "${facts.size} ${pluralFacts(facts.size)}",
+                            stringResource(R.string.memory_title),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            pluralStringResource(R.plurals.memory_facts_count, facts.size, facts.size),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -144,7 +150,7 @@ private fun FilterChipRow(
         FilterChip(
             selected = selected == null,
             onClick = { onSelected(null) },
-            label = { Text("Все") },
+            label = { Text(stringResource(R.string.memory_filter_all)) },
         )
         for (cat in CATEGORY_ORDER) {
             FilterChip(
@@ -220,7 +226,10 @@ private fun FactDetailDialog(fact: FactsRepository.Fact, onDismiss: () -> Unit) 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CategoryBadge(fact.category)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Факт #${fact.id}", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(R.string.memory_fact_id, fact.id),
+                    style = MaterialTheme.typography.titleMedium,
+                )
             }
         },
         text = {
@@ -231,25 +240,31 @@ private fun FactDetailDialog(fact: FactsRepository.Fact, onDismiss: () -> Unit) 
                     fontWeight = FontWeight.Medium,
                 )
                 Spacer(modifier = Modifier.height(12.dp))
-                DetailRow("Важность", "${fact.importance}/10")
-                DetailRow("Обращений", fact.accessCount.toString())
+                DetailRow(stringResource(R.string.memory_importance), "${fact.importance}/10")
+                DetailRow(stringResource(R.string.memory_access_count), fact.accessCount.toString())
                 fact.context?.takeIf { it.isNotBlank() }?.let {
-                    DetailRow("Контекст", it)
+                    DetailRow(stringResource(R.string.memory_context), it)
                 }
                 if (fact.keywords.isNotEmpty()) {
-                    DetailRow("Ключевые слова", fact.keywords.joinToString(", "))
+                    DetailRow(stringResource(R.string.memory_keywords), fact.keywords.joinToString(", "))
                 }
-                DetailRow("Создан", formatAbsolute(fact.createdAt))
+                DetailRow(stringResource(R.string.memory_created), formatAbsolute(fact.createdAt))
                 fact.eventDate?.let {
-                    DetailRow("Дата события", formatAbsoluteDate(it))
+                    DetailRow(stringResource(R.string.memory_event_date), formatAbsoluteDate(it))
                 }
                 fact.chatId?.let {
-                    DetailRow("Источник", "Локальный для чата #$it")
-                } ?: DetailRow("Источник", "Глобальный")
+                    DetailRow(
+                        stringResource(R.string.memory_source),
+                        stringResource(R.string.memory_source_local, it),
+                    )
+                } ?: DetailRow(
+                    stringResource(R.string.memory_source),
+                    stringResource(R.string.memory_source_global),
+                )
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Закрыть") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
         },
     )
 }
@@ -278,14 +293,19 @@ private fun EmptyState(hasFilter: Boolean) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = if (hasFilter) "В этой категории пусто" else "Память пока пуста",
+                text = stringResource(
+                    if (hasFilter) R.string.memory_filter_empty_title
+                    else R.string.memory_empty_title
+                ),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = if (hasFilter) "Попробуйте другую категорию или «Все»"
-                       else "Факты будут появляться по мере общения — после первого сжатия истории чата",
+                text = stringResource(
+                    if (hasFilter) R.string.memory_filter_empty_subtitle
+                    else R.string.memory_empty_subtitle
+                ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -302,13 +322,18 @@ private val CATEGORY_ORDER = listOf(
     "preference", "goal", "personal_info", "instruction", "event", "relationship"
 )
 
+/**
+ * UI-label для категории факта. БД-идентификатор остаётся английским
+ * ("preference"/"goal"/etc); локализованный label через res/strings.xml.
+ */
+@Composable
 private fun categoryLabel(category: String): String = when (category) {
-    "preference" -> "Предпочтения"
-    "goal" -> "Цели"
-    "personal_info" -> "Профиль"
-    "instruction" -> "Инструкции"
-    "event" -> "События"
-    "relationship" -> "Связи"
+    "preference" -> stringResource(R.string.cat_preference)
+    "goal" -> stringResource(R.string.cat_goal)
+    "personal_info" -> stringResource(R.string.cat_personal_info)
+    "instruction" -> stringResource(R.string.cat_instruction)
+    "event" -> stringResource(R.string.cat_event)
+    "relationship" -> stringResource(R.string.cat_relationship)
     else -> category
 }
 
@@ -334,21 +359,28 @@ private fun importanceStars(importance: Int): String {
     return "★".repeat(full) + (if (half == 1) "·" else "") + " $n/10"
 }
 
-private fun pluralFacts(n: Int): String = when {
-    n % 100 in 11..14 -> "фактов"
-    n % 10 == 1 -> "факт"
-    n % 10 in 2..4 -> "факта"
-    else -> "фактов"
-}
-
+/**
+ * Локализованный «N мин назад» / «X дн назад» через Android plurals.
+ * @Composable нужен для `pluralStringResource` / `stringResource`.
+ */
+@Composable
 private fun formatRelativeShort(unixSec: Long): String {
     val now = System.currentTimeMillis() / 1000L
     val diff = now - unixSec
     return when {
-        diff < 60 -> "только что"
-        diff < 3600 -> "${diff / 60} мин"
-        diff < 86400 -> "${diff / 3600} ч"
-        diff < 7 * 86400 -> "${diff / 86400} дн"
+        diff < 60 -> stringResource(R.string.time_just_now)
+        diff < 3600 -> {
+            val n = (diff / 60).toInt()
+            pluralStringResource(R.plurals.time_minutes_ago, n, n)
+        }
+        diff < 86400 -> {
+            val n = (diff / 3600).toInt()
+            pluralStringResource(R.plurals.time_hours_ago, n, n)
+        }
+        diff < 7 * 86400 -> {
+            val n = (diff / 86400).toInt()
+            pluralStringResource(R.plurals.time_days_ago, n, n)
+        }
         else -> SimpleDateFormat("dd.MM", Locale.getDefault()).format(Date(unixSec * 1000L))
     }
 }

@@ -8,6 +8,7 @@ import com.example.adaptivellm.device.DeviceDetector
 import com.example.adaptivellm.device.DeviceProfile
 import com.example.adaptivellm.device.RamTier
 import com.example.adaptivellm.BuildConfig
+import com.example.adaptivellm.R
 import com.example.adaptivellm.embedding.EmbeddingModel
 import com.example.adaptivellm.inference.InferenceEngine
 import com.example.adaptivellm.inference.InferenceEngineImpl
@@ -48,6 +49,7 @@ sealed class AppScreen {
     data object ChatList : AppScreen()
     data object Chat : AppScreen()
     data object FactsMemory : AppScreen()
+    data object Settings : AppScreen()
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -384,6 +386,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val updateCheckState: StateFlow<Boolean?> = _updateCheckState.asStateFlow()
 
     init {
+        // Stage 7 — user settings (тема, cross-chat facts toggle). Sync init,
+        // SharedPreferences читается мгновенно. Должен быть до Theme composable
+        // и до любых retrieval вызовов (которые читают cross-chat настройку).
+        com.example.adaptivellm.settings.SettingsRepository.init(application)
+
         // Initialize memory database (Stage 0 — schema + sqlite-vec ready). Запускается
         // независимо от chat flow. Если упадёт — log + ничего не делаем; chat
         // продолжит работать без памяти (degraded mode).
@@ -740,7 +747,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // (Phases 1.1-1.2 — top-K semantic search), композим dirty form.
             // На пустой БД фактов dirty == text → identical behavior как Stage 1-3.
             val dirtyUserMsg: String = try {
-                val instructions = FactsRepository.getActiveInstructions(chatId)
+                val crossChatAllowed = com.example.adaptivellm.settings.SettingsRepository
+                    .crossChatFactsEnabled.value
+                // Stage 7 — cross-chat OFF также фильтрует instructions для полной
+                // изоляции: legacy null chat_id (или пришедшие из других чатов
+                // если модель ошиблась с категорией) исключаются.
+                val instructions = FactsRepository.getActiveInstructions(chatId).let { list ->
+                    if (crossChatAllowed) list
+                    else list.filter { it.chatId == chatId }
+                }
                 val memories = if (RetrievalEngine.isReady()) {
                     RetrievalEngine.retrieveFacts(text, chatId, topKFactsFor(deviceProfile.ramTier))
                         .map { it.fact }
@@ -749,7 +764,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (it.length != text.length) {
                         android.util.Log.i("MainViewModel",
                             "B-dirty assembled: query=${text.length} chars → dirty=${it.length} chars " +
-                            "(instructions=${instructions.size}, memories=${memories.size})")
+                            "(instructions=${instructions.size}, memories=${memories.size}, crossChat=$crossChatAllowed)")
                     }
                 }
             } catch (e: Exception) {
@@ -766,7 +781,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     "len=${dirtyUserMsg.length} (clean=${text.length}), isFirstMsg=$isFirstMessage")
                 // Если это первое user сообщение в чате — сделаем auto-title из CLEAN текста
                 if (isFirstMessage) {
-                    val title = text.take(50).trim().ifBlank { "Чат" }
+                    val title = text.take(50).trim().ifBlank {
+                        getApplication<Application>().getString(R.string.chat_default_title)
+                    }
                     ChatRepository.updateTitle(chatId, title)
                     refreshChats()
                 }
@@ -844,7 +861,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // как assistant message. Иначе пользователь увидит пустой bubble после
             // re-open чата — confusing.
             if (cancelRequested && finalDisplayText.isBlank()) {
-                finalDisplayText = "(сообщение отменено)"
+                finalDisplayText = getApplication<Application>().getString(R.string.chat_cancelled_message)
                 val updated = _messages.value.toMutableList()
                 if (updated.isNotEmpty() && !updated.last().isUser) {
                     updated[updated.lastIndex] = ChatMessage(
@@ -924,10 +941,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // EvictionEngine.runEvictionInternal сам справится через snapshotBase.load()
         // возврат false.
         _isEvicting.value = true
-        _evictionStatus.value = if (mergeCount == 0) "Создание профиля памяти..."
-                                else "Сжатие истории чата..."
+        _evictionStatus.value = getApplication<Application>().getString(
+            if (mergeCount == 0) R.string.chat_creating_profile
+            else R.string.chat_evicting_default
+        )
         try {
             EvictionEngine.checkAndRun(
+                context = getApplication(),
                 chatId = chatId,
                 engine = engine,
                 ramTier = deviceProfile.ramTier,
@@ -1169,10 +1189,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // do its own [system_only] reset (via snapshot_base or setSystemPrompt)
                 // and re-decode summary + last-N at the end.
                 _isEvicting.value = true
-                _evictionStatus.value = if (preEvictionMergeCount == 0) "Создание профиля памяти..."
-                                        else "Сжатие истории чата..."
+                _evictionStatus.value = getApplication<Application>().getString(
+                    if (preEvictionMergeCount == 0) R.string.chat_creating_profile
+                    else R.string.chat_evicting_default
+                )
                 try {
                     EvictionEngine.runEviction(
+                        context = getApplication(),
                         chatId = chatId,
                         engine = engine,
                         ramTier = deviceProfile.ramTier,
@@ -1309,6 +1332,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openFactsMemory() {
         _screen.value = AppScreen.FactsMemory
         refreshFacts()
+    }
+
+    /** Куда вернуться когда юзер закроет Settings. */
+    private var settingsReturnTo: AppScreen? = null
+
+    /** Stage 7 — открывает экран настроек. Запоминает откуда пришли для back. */
+    fun openSettings() {
+        settingsReturnTo = _screen.value
+        _screen.value = AppScreen.Settings
+    }
+
+    /** Stage 7 — back из Settings возвращает на тот же экран откуда пришли. */
+    fun closeSettings() {
+        _screen.value = settingsReturnTo ?: AppScreen.ChatList
+        settingsReturnTo = null
     }
 
     /**
