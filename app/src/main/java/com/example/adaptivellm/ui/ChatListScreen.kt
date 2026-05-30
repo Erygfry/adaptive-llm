@@ -2,7 +2,6 @@ package com.example.adaptivellm.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -48,10 +48,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.unit.dp
 import com.example.adaptivellm.R
 import com.example.adaptivellm.inference.InferenceEngine
 import com.example.adaptivellm.storage.ChatRepository
+import com.example.adaptivellm.ui.theme.okColor
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -139,28 +141,29 @@ fun ChatListScreen(viewModel: MainViewModel) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 stringResource(R.string.chatlist_title),
-                                style = MaterialTheme.typography.titleMedium,
+                                style = MaterialTheme.typography.headlineMedium,
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
                             val atLimit = chats.size >= MainViewModel.MAX_CHATS
                             Text(
-                                "${chats.size}/${MainViewModel.MAX_CHATS}",
-                                style = MaterialTheme.typography.bodySmall,
+                                "${chats.size} / ${MainViewModel.MAX_CHATS}",
+                                style = MaterialTheme.typography.labelMedium,
                                 color = if (atLimit)
                                     MaterialTheme.colorScheme.error
                                 else
                                     MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        val status = when (engineState) {
+                        val statusWord = when (engineState) {
                             is InferenceEngine.State.LoadingModel -> stringResource(R.string.chat_loading_model)
-                            is InferenceEngine.State.ModelLoaded -> loadedModelName.ifBlank { stringResource(R.string.common_ready) }
+                            is InferenceEngine.State.ModelLoaded -> stringResource(R.string.common_ready)
                             is InferenceEngine.State.Error -> stringResource(R.string.common_error)
                             else -> stringResource(R.string.common_initializing)
                         }
+                        val modelTag = loadedModelName.ifBlank { "—" }.lowercase()
                         Text(
-                            status,
-                            style = MaterialTheme.typography.bodySmall,
+                            "$modelTag · $statusWord",
+                            style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -199,6 +202,17 @@ fun ChatListScreen(viewModel: MainViewModel) {
             val canCreate = !isSwitchingChat && !atLimit
             FloatingActionButton(
                 onClick = { if (canCreate) viewModel.createNewChat() },
+                modifier = Modifier
+                    .padding(end = 4.dp, bottom = 16.dp)
+                    .size(56.dp)
+                    .shadow(
+                        elevation = 8.dp,
+                        shape = RoundedCornerShape(18.dp),
+                        clip = false,
+                        ambientColor = MaterialTheme.colorScheme.primary,
+                        spotColor = MaterialTheme.colorScheme.primary,
+                    ),
+                shape = RoundedCornerShape(18.dp),
                 containerColor = if (canCreate)
                     MaterialTheme.colorScheme.primaryContainer
                 else
@@ -230,8 +244,7 @@ fun ChatListScreen(viewModel: MainViewModel) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         stringResource(R.string.chatlist_empty_title),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.headlineMedium,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -246,8 +259,10 @@ fun ChatListScreen(viewModel: MainViewModel) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = 12.dp, end = 12.dp, top = 8.dp, bottom = 88.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(chats, key = { it.id }) { chat ->
                     ChatListItem(
@@ -274,10 +289,12 @@ private fun ChatListItem(
     onDeleteClick: () -> Unit,
     enabled: Boolean,
 ) {
+    val nowSec = System.currentTimeMillis() / 1000L
+    val isRecent = (nowSec - chat.lastActiveAt) < 60
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(
                 if (enabled) MaterialTheme.colorScheme.surfaceVariant
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
@@ -287,23 +304,33 @@ private fun ChatListItem(
                 onClick = onClick,
                 onLongClick = onLongClick,
             )
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = chat.title?.ifBlank { null } ?: stringResource(R.string.common_untitled),
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
+                style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = formatRelativeTime(chat.lastActiveAt),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            )
+            Spacer(modifier = Modifier.height(3.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isRecent) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(okColor()),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(
+                    text = formatRelativeTime(chat.lastActiveAt),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                )
+            }
         }
         IconButton(
             onClick = onRenameClick,
@@ -314,7 +341,7 @@ private fun ChatListItem(
                 Icons.Default.Create,
                 contentDescription = stringResource(R.string.chatlist_rename_chat),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 0.7f else 0.3f),
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(18.dp),
             )
         }
         IconButton(
@@ -326,7 +353,7 @@ private fun ChatListItem(
                 Icons.Default.Delete,
                 contentDescription = stringResource(R.string.chatlist_delete_chat),
                 tint = MaterialTheme.colorScheme.error.copy(alpha = if (enabled) 0.7f else 0.3f),
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(18.dp),
             )
         }
     }

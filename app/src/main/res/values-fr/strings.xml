@@ -160,4 +160,9 @@
         <item quantity="one">il y a %d jour</item>
         <item quantity="other">il y a %d jours</item>
     </plurals>
+    <string name="setup_recommended_label">Recommandé</string>
+    <string name="settings_material_you_body">Prendre les couleurs du fond d\'écran (Android 12+). Remplace la palette Mono.</string>
+    <string name="facts_from_label">DE</string>
+    <string name="chat_copy_message">Copier le message</string>
+    <string name="markdown_copy_code">Copier le code</string>
 </resources>

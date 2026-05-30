@@ -60,6 +60,7 @@ class InferenceEngineImpl private constructor(
     private external fun nativeWasThinkingDisabled(): Boolean
     private external fun nativeCancelAndCleanKV()
     private external fun nativeCancelLoading()
+    private external fun nativeCancelDecode()
     private external fun nativeAddMessageToHistory(role: String, text: String): Int
     private external fun nativeStateSaveFile(path: String): Int
     private external fun nativeStateLoadFile(path: String): Int
@@ -214,6 +215,10 @@ class InferenceEngineImpl private constructor(
 
     override fun cancelLoading() {
         nativeCancelLoading()
+    }
+
+    override fun cancelDecode() {
+        nativeCancelDecode()
     }
 
     override suspend fun addMessageToHistory(role: String, text: String): Int =

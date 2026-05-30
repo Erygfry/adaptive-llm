@@ -160,4 +160,9 @@
         <item quantity="one">hace %d día</item>
         <item quantity="other">hace %d días</item>
     </plurals>
+    <string name="setup_recommended_label">Recomendado</string>
+    <string name="settings_material_you_body">Tomar colores del fondo del dispositivo (Android 12+). Sustituye la paleta Mono.</string>
+    <string name="facts_from_label">DESDE</string>
+    <string name="chat_copy_message">Copiar mensaje</string>
+    <string name="markdown_copy_code">Copiar código</string>
 </resources>

@@ -53,11 +53,27 @@
     <string name="chat_input_placeholder">Введите сообщение…</string>
     <string name="chat_send">Отправить</string>
     <string name="chat_stop_generation">Остановить генерацию</string>
-    <string name="chat_thinking_header">Размышления</string>
+    <string name="chat_thinking_header">Режим мышления</string>
     <string name="chat_thinking_auto">Авто</string>
     <string name="chat_thinking_always">Всегда</string>
     <string name="chat_thinking_off">Отключено</string>
+    <string name="chat_thinking_auto_hint">для сложных вопросов</string>
+    <string name="chat_thinking_always_hint">медленнее, но точнее</string>
+    <string name="chat_thinking_off_hint">быстрее, без раздумий</string>
+    <string name="chat_thinking_steps">Размышления · %1$d шагов</string>
     <string name="chat_check_for_updates">Проверить обновления</string>
+    <string name="empty_hello">Привет.</string>
+    <string name="empty_question">Что хочешь спросить?</string>
+    <string name="empty_offline_private">Без сети · приватно</string>
+    <string name="empty_quick_start">Быстрый старт</string>
+    <string name="empty_prompt_code">Объясни замыкания в JavaScript</string>
+    <string name="empty_prompt_write">Письмо коллеге с извинением за пропуск</string>
+    <string name="empty_prompt_ideas">Идеи подарка маме на день рождения</string>
+    <string name="empty_prompt_learn">Что такое энтропия — простыми словами</string>
+    <string name="empty_tag_code">CODE</string>
+    <string name="empty_tag_write">WRITE</string>
+    <string name="empty_tag_ideas">IDEAS</string>
+    <string name="empty_tag_learn">LEARN</string>
 
     <!-- Update dialog -->
     <string name="update_available">Доступно обновление: v%1$s</string>
@@ -123,6 +139,8 @@
     <string name="settings_cross_chat_off">Модель видит только факты текущего чата. Полная изоляция между чатами — полезно для приватных тем.</string>
     <string name="settings_section_language">Язык</string>
     <string name="settings_language_system">Системный</string>
+    <string name="settings_section_data">Данные</string>
+    <string name="settings_export_all">Экспорт всех чатов</string>
 
     <!-- Eviction progress -->
     <string name="eviction_analyze_dialog">Анализ диалога и извлечение фактов…</string>
@@ -168,4 +186,9 @@
         <item quantity="many">%d дней назад</item>
         <item quantity="other">%d дня назад</item>
     </plurals>
+    <string name="setup_recommended_label">Рекомендуется</string>
+    <string name="settings_material_you_body">Брать цвета из обоев устройства (Android 12+). Перекрывает Mono палитру.</string>
+    <string name="facts_from_label">ИЗ</string>
+    <string name="chat_copy_message">Копировать сообщение</string>
+    <string name="markdown_copy_code">Копировать код</string>
 </resources>

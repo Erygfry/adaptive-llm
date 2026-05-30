@@ -1,7 +1,9 @@
 package com.example.adaptivellm.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,7 +24,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +49,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.adaptivellm.R
 import com.example.adaptivellm.storage.FactsRepository
 import java.text.SimpleDateFormat
@@ -115,11 +117,12 @@ fun FactsMemoryScreen(viewModel: MainViewModel) {
                     Column {
                         Text(
                             stringResource(R.string.memory_title),
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.headlineMedium,
                         )
+                        val count = pluralStringResource(R.plurals.memory_facts_count, facts.size, facts.size)
                         Text(
-                            pluralStringResource(R.plurals.memory_facts_count, facts.size, facts.size),
-                            style = MaterialTheme.typography.bodySmall,
+                            "$count · top-k = 24",
+                            style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -162,7 +165,6 @@ fun FactsMemoryScreen(viewModel: MainViewModel) {
 }
 
 /** Горизонтальный ряд chip'ов: «Все» + по одной на категорию. */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FilterChipRow(
     selected: String?,
@@ -172,57 +174,88 @@ private fun FilterChipRow(
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = 0.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        FilterChip(
+        MonoFilterChip(
+            label = stringResource(R.string.memory_filter_all),
             selected = selected == null,
             onClick = { onSelected(null) },
-            label = { Text(stringResource(R.string.memory_filter_all)) },
         )
         for (cat in CATEGORY_ORDER) {
-            FilterChip(
+            MonoFilterChip(
+                label = categoryLabel(cat),
                 selected = selected == cat,
                 onClick = { onSelected(cat) },
-                label = { Text(categoryLabel(cat)) },
             )
         }
     }
 }
 
 @Composable
+private fun MonoFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val bg = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent
+    val fg = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+    Box(
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(bg)
+            .then(
+                if (!selected) Modifier.border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                else Modifier
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+            color = fg,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
 private fun FactCard(fact: FactsRepository.Fact, onClick: () -> Unit) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.Top,
+            .padding(14.dp),
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CategoryBadge(fact.category)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = importanceStars(fact.importance),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                Text(
-                    text = formatRelativeShort(fact.createdAt),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                )
-            }
-            Spacer(modifier = Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CategoryBadge(fact.category)
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = fact.content,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 2,
+                text = importanceStars(fact.importance),
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = formatRelativeShort(fact.createdAt),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = fact.content,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 2,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val source = fact.context?.takeIf { it.isNotBlank() }
+        if (source != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            val fromLabel = stringResource(R.string.facts_from_label)
+            Text(
+                text = "$fromLabel · ${source.take(40)}".uppercase(),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp, letterSpacing = 0.3.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
             )
         }
     }
@@ -233,15 +266,18 @@ private fun CategoryBadge(category: String) {
     val (bg, fg) = categoryColors(category)
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(5.dp))
             .background(bg)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .padding(horizontal = 7.dp, vertical = 2.dp),
     ) {
         Text(
-            text = categoryLabel(category),
-            style = MaterialTheme.typography.labelSmall,
+            text = categoryLabel(category).uppercase(),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 9.5.sp,
+                letterSpacing = 0.6.sp,
+            ),
             color = fg,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.SemiBold,
         )
     }
 }

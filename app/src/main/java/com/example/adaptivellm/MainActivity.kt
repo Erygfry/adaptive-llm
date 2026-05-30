@@ -10,6 +10,7 @@ import android.os.LocaleList
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.compose.runtime.collectAsState
@@ -26,6 +27,11 @@ import com.example.adaptivellm.ui.SetupScreen
 import com.example.adaptivellm.ui.theme.AdaptiveLLMTheme
 
 class MainActivity : ComponentActivity() {
+
+    // Создаём через delegate чтобы можно было дёргать onAppBackgrounded/Foregrounded
+    // из onStop/onStart. Внутри setContent { viewModel() } получит ту же instance —
+    // ComponentActivity использует одинаковый ViewModelStore.
+    private val mainViewModel: MainViewModel by viewModels()
 
     /**
      * Применяем выбранную локаль к Configuration ДО того как Activity загружает
@@ -84,6 +90,28 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Приложение свернули (HOME / переключение задач / экран выключен).
+     * Гасим тяжёлые JNI-операции (model load / generation / chat replay) и
+     * сетевой канал Firestore. Без этого llama.cpp продолжает decode в фоне,
+     * жжёт CPU/GPU, а Firestore спамит DNS-резолвом каждые 2-3 сек.
+     *
+     * `isChangingConfigurations` — защита от ложного триггера при rotation /
+     * theme switch (тогда onStop+onStart срабатывает, но пользователь по факту
+     * никуда не уходил).
+     */
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) {
+            mainViewModel.onAppBackgrounded()
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        mainViewModel.onAppForegrounded()
     }
 
     private fun requestNotificationPermission() {

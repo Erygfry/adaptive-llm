@@ -3,10 +3,8 @@ package com.example.adaptivellm.ui.theme
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -16,20 +14,22 @@ import com.example.adaptivellm.settings.SettingsRepository
 /**
  * Главный theme wrapper приложения.
  *
- * Поведение dark/light определяется пользовательской настройкой
- * [SettingsRepository.themeMode]:
- *   - SYSTEM → следует системной теме устройства (default)
+ * По умолчанию используется фиксированная Mono палитра редизайна
+ * (см. [MonoDarkScheme] / [MonoLightScheme]). Пользователь может включить
+ * Material You в настройках — тогда на Android 12+ применяется
+ * dynamicColorScheme(context) из обоев.
+ *
+ * Dark/light режим задаётся через [SettingsRepository.themeMode]:
+ *   - SYSTEM → системная тема устройства (default)
  *   - LIGHT  → принудительно светлая
  *   - DARK   → принудительно тёмная
- *
- * Переключение реактивно (через collectAsState) — recomposition применяет
- * новую палитру без перезапуска Activity.
  */
 @Composable
 fun AdaptiveLLMTheme(
     content: @Composable () -> Unit
 ) {
     val mode by SettingsRepository.themeMode.collectAsState()
+    val useMaterialYou by SettingsRepository.useMaterialYou.collectAsState()
     val systemDark = isSystemInDarkTheme()
     val darkTheme = when (mode) {
         SettingsRepository.ThemeMode.SYSTEM -> systemDark
@@ -37,18 +37,17 @@ fun AdaptiveLLMTheme(
         SettingsRepository.ThemeMode.DARK -> true
     }
 
-    val colorScheme = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context)
-            else dynamicLightColorScheme(context)
-        }
-        darkTheme -> darkColorScheme()
-        else -> lightColorScheme()
+    val dynamicAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val colorScheme = if (useMaterialYou && dynamicAvailable) {
+        val context = LocalContext.current
+        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else {
+        if (darkTheme) MonoDarkScheme else MonoLightScheme
     }
 
     MaterialTheme(
         colorScheme = colorScheme,
-        content = content
+        typography = AppTypography,
+        content = content,
     )
 }

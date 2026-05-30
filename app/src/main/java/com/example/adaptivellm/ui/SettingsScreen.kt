@@ -1,34 +1,42 @@
 package com.example.adaptivellm.ui
 
+import android.app.Activity
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import android.app.Activity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,20 +47,13 @@ import androidx.compose.ui.unit.dp
 import com.example.adaptivellm.R
 import com.example.adaptivellm.settings.SettingsRepository
 
-/**
- * Stage 7 — экран настроек приложения.
- *
- * Сейчас покрывает: тема, переключатель cross-chat фактов. Языковой
- * переключатель — следующая итерация (требует локализации UI).
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
     val themeMode by SettingsRepository.themeMode.collectAsState()
     val crossChatFacts by SettingsRepository.crossChatFactsEnabled.collectAsState()
     val appLanguage by SettingsRepository.appLanguage.collectAsState()
-    // Нужен для recreate() после смены языка — на Android < 13 AppCompatDelegate
-    // не пересоздаёт ComponentActivity автоматически (только AppCompatActivity).
+    val materialYou by SettingsRepository.useMaterialYou.collectAsState()
     val activity = LocalContext.current as? Activity
 
     Scaffold(
@@ -69,7 +70,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 title = {
                     Text(
                         stringResource(R.string.settings_title),
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.headlineMedium,
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -83,162 +84,250 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+                .padding(horizontal = 20.dp, vertical = 14.dp),
         ) {
-            ThemeSection(
-                current = themeMode,
-                onChange = { SettingsRepository.setThemeMode(it) },
+            // ТЕМА
+            SectionLabel(stringResource(R.string.settings_section_theme))
+            Spacer(modifier = Modifier.height(10.dp))
+            CardGroup {
+                RadioRow(
+                    label = stringResource(R.string.settings_theme_system),
+                    selected = themeMode == SettingsRepository.ThemeMode.SYSTEM,
+                    onClick = { SettingsRepository.setThemeMode(SettingsRepository.ThemeMode.SYSTEM) },
+                )
+                GroupDivider()
+                RadioRow(
+                    label = stringResource(R.string.settings_theme_light),
+                    selected = themeMode == SettingsRepository.ThemeMode.LIGHT,
+                    onClick = { SettingsRepository.setThemeMode(SettingsRepository.ThemeMode.LIGHT) },
+                )
+                GroupDivider()
+                RadioRow(
+                    label = stringResource(R.string.settings_theme_dark),
+                    selected = themeMode == SettingsRepository.ThemeMode.DARK,
+                    onClick = { SettingsRepository.setThemeMode(SettingsRepository.ThemeMode.DARK) },
+                )
+                GroupDivider()
+                SwitchRow(
+                    title = "Material You",  // бренд Google, не локализуется
+                    body = stringResource(R.string.settings_material_you_body),
+                    checked = materialYou,
+                    onCheckedChange = { SettingsRepository.setUseMaterialYou(it) },
+                )
+            }
+
+            Spacer(modifier = Modifier.height(22.dp))
+
+            // ПАМЯТЬ
+            SectionLabel(stringResource(R.string.settings_section_memory))
+            Spacer(modifier = Modifier.height(10.dp))
+            CardGroup {
+                SwitchRow(
+                    title = stringResource(R.string.settings_cross_chat_label),
+                    body = stringResource(
+                        if (crossChatFacts) R.string.settings_cross_chat_on
+                        else R.string.settings_cross_chat_off
+                    ),
+                    checked = crossChatFacts,
+                    onCheckedChange = { SettingsRepository.setCrossChatFactsEnabled(it) },
+                )
+            }
+
+            Spacer(modifier = Modifier.height(22.dp))
+
+            // ЯЗЫК
+            SectionLabel(stringResource(R.string.settings_section_language))
+            Spacer(modifier = Modifier.height(10.dp))
+            val languageOptions = listOf(
+                SettingsRepository.AppLanguage.SYSTEM to stringResource(R.string.settings_language_system),
+                SettingsRepository.AppLanguage.EN to "English",
+                SettingsRepository.AppLanguage.RU to "Русский",
+                SettingsRepository.AppLanguage.ES to "Español",
+                SettingsRepository.AppLanguage.FR to "Français",
+                SettingsRepository.AppLanguage.DE to "Deutsch",
+                SettingsRepository.AppLanguage.ZH to "中文",
             )
+            CardGroup {
+                languageOptions.forEachIndexed { index, (lang, label) ->
+                    if (index > 0) GroupDivider()
+                    RadioRow(
+                        label = label,
+                        selected = appLanguage == lang,
+                        onClick = {
+                            SettingsRepository.setAppLanguage(lang)
+                            activity?.recreate()
+                        },
+                    )
+                }
+            }
 
-            HorizontalDivider()
-
-            MemorySection(
-                crossChatEnabled = crossChatFacts,
-                onToggle = { SettingsRepository.setCrossChatFactsEnabled(it) },
+            /*
+            // ДАННЫЕ — раздел временно скрыт до реализации экспорта (SAF + JSON
+            // сериализация всех чатов). Composable DataExportRow и строки
+            // settings_section_data / settings_export_all оставлены — раскомментируем,
+            // когда фича будет готова.
+            Spacer(modifier = Modifier.height(22.dp))
+            SectionLabel(stringResource(R.string.settings_section_data))
+            Spacer(modifier = Modifier.height(10.dp))
+            DataExportRow(
+                label = stringResource(R.string.settings_export_all),
+                onClick = { /* TODO: export всех чатов */ },
             )
-
-            HorizontalDivider()
-
-            LanguageSection(
-                current = appLanguage,
-                onChange = {
-                    SettingsRepository.setAppLanguage(it)
-                    // Принудительный recreate — apply locale тут же увидит результат.
-                    // На Android 13+ это уже не нужно (LocaleManager сам recreate'ит),
-                    // но повторный вызов безопасен.
-                    activity?.recreate()
-                },
-            )
+            */
         }
     }
 }
 
 @Composable
-private fun SectionTitle(text: String) {
+private fun SectionLabel(text: String) {
     Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(bottom = 4.dp),
+        text = text.uppercase(),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
     )
 }
 
 @Composable
-private fun ThemeSection(
-    current: SettingsRepository.ThemeMode,
-    onChange: (SettingsRepository.ThemeMode) -> Unit,
-) {
-    Column {
-        SectionTitle(stringResource(R.string.settings_section_theme))
-        Spacer(modifier = Modifier.height(4.dp))
-        ThemeOption(stringResource(R.string.settings_theme_system),
-            selected = current == SettingsRepository.ThemeMode.SYSTEM,
-            onClick = { onChange(SettingsRepository.ThemeMode.SYSTEM) })
-        ThemeOption(stringResource(R.string.settings_theme_light),
-            selected = current == SettingsRepository.ThemeMode.LIGHT,
-            onClick = { onChange(SettingsRepository.ThemeMode.LIGHT) })
-        ThemeOption(stringResource(R.string.settings_theme_dark),
-            selected = current == SettingsRepository.ThemeMode.DARK,
-            onClick = { onChange(SettingsRepository.ThemeMode.DARK) })
+private fun CardGroup(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        content = content,
+    )
+}
+
+@Composable
+private fun GroupDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(MaterialTheme.colorScheme.outlineVariant),
+    )
+}
+
+@Composable
+private fun RadioRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CustomRadio(selected = selected)
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 
 @Composable
-private fun ThemeOption(
+private fun CustomRadio(selected: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(18.dp)
+            .clip(CircleShape)
+            .border(
+                width = 1.5.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                shape = CircleShape,
+            )
+            .then(
+                if (selected) Modifier.background(MaterialTheme.colorScheme.primary)
+                else Modifier
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onPrimary),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SwitchRow(
     title: String,
-    selected: Boolean,
-    onClick: () -> Unit,
+    body: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 6.dp, horizontal = 4.dp),
+            .clickable { onCheckedChange(!checked) }
+            .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(selected = selected, onClick = onClick)
-        Text(
-            title,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(start = 4.dp),
-        )
-    }
-}
-
-@Composable
-private fun MemorySection(
-    crossChatEnabled: Boolean,
-    onToggle: (Boolean) -> Unit,
-) {
-    Column {
-        SectionTitle(stringResource(R.string.settings_section_memory))
-        Spacer(modifier = Modifier.height(4.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .clickable { onToggle(!crossChatEnabled) }
-                .padding(vertical = 8.dp, horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (body.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    stringResource(R.string.settings_cross_chat_label),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Text(
-                    text = stringResource(
-                        if (crossChatEnabled) R.string.settings_cross_chat_on
-                        else R.string.settings_cross_chat_off
-                    ),
+                    text = body,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Switch(checked = crossChatEnabled, onCheckedChange = onToggle)
         }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                uncheckedBorderColor = MaterialTheme.colorScheme.outline,
+            ),
+        )
     }
 }
 
 @Composable
-private fun LanguageSection(
-    current: SettingsRepository.AppLanguage,
-    onChange: (SettingsRepository.AppLanguage) -> Unit,
-) {
-    Column {
-        SectionTitle(stringResource(R.string.settings_section_language))
-        Spacer(modifier = Modifier.height(4.dp))
-        // Native-name каждого языка (показываем на самом языке, не транслитом),
-        // чтобы юзер находил свой даже если интерфейс на незнакомом языке.
-        // Только «Системный» локализуется — остальные специально на родном языке.
-        val options = listOf(
-            SettingsRepository.AppLanguage.SYSTEM to stringResource(R.string.settings_language_system),
-            SettingsRepository.AppLanguage.EN to "English",
-            SettingsRepository.AppLanguage.RU to "Русский",
-            SettingsRepository.AppLanguage.ES to "Español",
-            SettingsRepository.AppLanguage.FR to "Français",
-            SettingsRepository.AppLanguage.DE to "Deutsch",
-            SettingsRepository.AppLanguage.ZH to "中文",
+private fun DataExportRow(label: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.Download,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
         )
-        for ((lang, label) in options) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .clickable { onChange(lang) }
-                    .padding(vertical = 6.dp, horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RadioButton(selected = current == lang, onClick = { onChange(lang) })
-                Text(
-                    label,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(start = 4.dp),
-                )
-            }
-        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
     }
 }

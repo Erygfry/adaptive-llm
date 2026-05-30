@@ -31,6 +31,7 @@ import com.example.adaptivellm.update.ApkInstaller
 import android.content.Context
 import com.example.adaptivellm.update.ReleaseInfo
 import com.example.adaptivellm.update.UpdateChecker
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -346,6 +347,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val _isSwitchingChat = MutableStateFlow(false)
     val isSwitchingChat: StateFlow<Boolean> = _isSwitchingChat.asStateFlow()
+
+    /**
+     * Узкий "сообщения для текущего чата загружены из БД". Флипается за ~ms
+     * после selectChat (DB-запрос быстрый, независим от engine), в отличие от
+     * [isSwitchingChat] которое держится секунды (включает model load + KV restore).
+     * ChatScreen использует этот флаг для различения «существующий чат
+     * подгружается» (показать спиннер) vs «новый пустой чат» (приветственный экран).
+     */
+    private val _messagesLoaded = MutableStateFlow(true)
+    val messagesLoaded: StateFlow<Boolean> = _messagesLoaded.asStateFlow()
 
     /**
      * Stage 6.1 — true когда идёт Phase 4 eviction (LLM extraction call +
@@ -983,34 +994,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun goBackToSetup() {
+        // ─── ШАГ 1: UI-навигация СРАЗУ (синхронно, ms) ───
+        // Cancel-флаги ставим первыми, чтобы фоновые long-running ops (model load,
+        // generation, chat switch) увидели сигнал и завершились как можно скорее.
+        cancelRequested = true
+        engine.cancelLoading()        // flag для model load
+        engine.stopGeneration()       // flag для generation
+        engine.cancelDecode()         // прерывает llama_decode внутри JNI
+        chatSwitchJob?.cancel()       // прерываем chat switch если идёт
+        chatSwitchJob = null
+        val exitingChatId = _currentChatId.value
+        // UI state reset — экран Setup появится сразу, пользователь не висит на ChatList
+        // в ожидании KV save + unloadModel (могут занять секунды).
+        _messages.value = emptyList()
+        _currentChatId.value = null
+        _tokensPerSecond.value = 0f
+        _totalTokens.value = 0
+        _backendInfo.value = ""
+        _loadedModelName.value = ""
+        _isSwitchingChat.value = false
+        _messagesLoaded.value = false
+        refreshDownloadedModels()  // sync: file-existence check для каждой модели — быстро
+        _screen.value = AppScreen.Setup
+
+        // ─── ШАГ 2: тяжёлая чистка в фоне ───
+        // llamaDispatcher single-threaded → если пользователь успеет нажать Start Chat
+        // до завершения unloadModel, новый loadModel встанет в очередь, не сломается.
         viewModelScope.launch {
-            // Order matters: оба cancel-сигнала ставятся ПЕРЕД unloadModel, чтобы:
-            //   - Если идёт model load → progress_callback видит флаг → abort в течение
-            //     миллисекунд → llamaDispatcher освобождается → unloadModel запускается
-            //     почти сразу (вместо 5-10 сек ожидания полной загрузки модели).
-            //   - Если идёт generation → cancelGeneration флаг видит loop в sendMessage
-            //     flow → выход + cancelAndCleanKV → unloadModel запускается дальше.
-            cancelRequested = true
-            engine.cancelLoading()        // flag для model load
-            engine.stopGeneration()       // flag для generation
-            chatSwitchJob?.cancel()       // прерываем chat switch если идёт
-            chatSwitchJob = null
-            // Если есть открытый чат — сохраняем его KV до unloadModel (после
-            // unload engine state будет очищен и save невозможен). Save sync,
-            // не fire-and-forget, чтобы успеть до unload.
-            val exitingChatId = _currentChatId.value
             if (exitingChatId != null) {
                 saveChatKvCacheIfApplicable(exitingChatId)
             }
-            engine.unloadModel()          // ждёт завершения текущей операции на llamaDispatcher
-            _messages.value = emptyList()
-            _currentChatId.value = null
-            _tokensPerSecond.value = 0f
-            _totalTokens.value = 0
-            _backendInfo.value = ""
-            _loadedModelName.value = ""
-            refreshDownloadedModels()
-            _screen.value = AppScreen.Setup
+            engine.unloadModel()
         }
     }
 
@@ -1066,23 +1080,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun selectChatInternal(chatId: Long, isNew: Boolean) {
         _isSwitchingChat.value = true
+        _messagesLoaded.value = false
         // Транзиционно показываем Chat screen с пустыми сообщениями (или старыми)
         // — пользователь сразу видит «Загрузка чата...» вместо застрявшего ChatList'а.
         _screen.value = AppScreen.Chat
         try {
-            // Lazy load: грузим модель только при первом реальном входе в чат
-            // (а не при init'е ChatList). Если model уже loaded — это no-op.
-            val modelReady = ensureModelLoaded()
-            if (!modelReady) {
-                android.util.Log.e("MainViewModel", "selectChat: model load failed/cancelled")
-                _screen.value = AppScreen.ChatList
-                return
-            }
-
-            // Отменяем generation если идёт (после переключения это будет уже не наш ответ)
-            engine.stopGeneration()
-
-            // Загружаем messages из БД
+            // ─── FAST PATH: сообщения из БД ДО загрузки модели ───
+            // DB-запрос независим от engine и занимает ~ms. Показываем сообщения сразу,
+            // чтобы пользователь видел свой чат, а медленные стадии (model load + KV
+            // restoration) шли в фоне с заблокированным инпутом.
             val rows = if (isNew) emptyList() else ChatRepository.getMessages(chatId)
             android.util.Log.i("MainViewModel", "selectChat: chatId=$chatId, isNew=$isNew, rows=${rows.size}")
             _messages.value = rows.map {
@@ -1096,6 +1102,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     thinkingText = "", // Stage 1: thinking не персистится отдельно, оставляем пустым
                 )
             }
+            _messagesLoaded.value = true  // спиннер уходит, ChatScreen рендерит реальный список
+
+            // ─── SLOW PATH: модель + KV ───
+            // Lazy load: грузим модель только при первом реальном входе в чат
+            // (а не при init'е ChatList). Если model уже loaded — это no-op.
+            val modelReady = ensureModelLoaded()
+            if (!modelReady) {
+                android.util.Log.e("MainViewModel", "selectChat: model load failed/cancelled")
+                // Race-safe: не стомпаем screen, если пользователь уже куда-то ушёл
+                // или запустил новый switch — иначе выбьем активный Job наружу.
+                if (chatSwitchJob === coroutineContext[kotlinx.coroutines.Job]) {
+                    _screen.value = AppScreen.ChatList
+                }
+                return
+            }
+
+            // Отменяем generation если идёт (после переключения это будет уже не наш ответ)
+            engine.stopGeneration()
 
             // ─── KV restoration: трёхуровневая fallback chain ───
             // 1. Strategy A + has_kv_cache=1 → kv_cache.bin (full state, нулевой replay)
@@ -1246,19 +1270,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ChatRepository.touchChat(chatId)
             refreshChats()
         } catch (e: kotlinx.coroutines.CancellationException) {
-            // Пользователь нажал back во время switch'а — откатываем UI на ChatList.
+            // Пользователь нажал back во время switch'а — обычно надо откатить UI на
+            // ChatList. НО race-prone: если он уже успел открыть ДРУГОЙ чат (Job B
+            // запущен), наш cleanup стомпает screen/messages/currentChatId этого
+            // нового активного switch'а — пользователь резко вылетает из чата B на
+            // ChatList. Откатываем UI ТОЛЬКО если мы всё ещё активный job.
             // KV state в engine остаётся partial (часть сообщений decoded), но это OK:
             // следующий selectChat сделает setSystemPrompt → reset_chat_state → wipe.
             android.util.Log.i("MainViewModel", "selectChat cancelled by user for id=$chatId")
-            _screen.value = AppScreen.ChatList
-            _messages.value = emptyList()
-            _currentChatId.value = null
+            if (chatSwitchJob === coroutineContext[kotlinx.coroutines.Job]) {
+                _screen.value = AppScreen.ChatList
+                _messages.value = emptyList()
+                _currentChatId.value = null
+            }
             throw e  // rethrow обязателен — structured concurrency
         } catch (e: Exception) {
             android.util.Log.e("MainViewModel", "selectChat failed for id=$chatId", e)
-            _screen.value = AppScreen.ChatList
+            if (chatSwitchJob === coroutineContext[kotlinx.coroutines.Job]) {
+                _screen.value = AppScreen.ChatList
+            }
         } finally {
-            _isSwitchingChat.value = false
+            // Race-safe: сбрасываем флаг ТОЛЬКО если наш job всё ещё активный.
+            // Если пользователь нажал back или быстро переключился на другой чат,
+            // chatSwitchJob уже указывает либо на null, либо на новый job —
+            // не трогаем флаг, иначе можем стереть _isSwitchingChat=true,
+            // выставленный новым активным switch'ем.
+            if (chatSwitchJob === coroutineContext[kotlinx.coroutines.Job]) {
+                _isSwitchingChat.value = false
+            }
         }
     }
 
@@ -1313,8 +1352,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // handler сделает UI cleanup. engine.cancelLoading нужен на случай если model
         // ещё грузится — без него native load доработает до конца до выхода cancel'а.
         engine.cancelLoading()
+        engine.cancelDecode()  // прерывает llama_decode внутри JNI
         chatSwitchJob?.cancel()
         chatSwitchJob = null
+        // Сбрасываем _isSwitchingChat ДО того, как cancel реально пропагнируется
+        // через нативный model-load (на JNI может занять секунды). Без этого UI на
+        // ChatList остаётся залоченным (canCreate FAB и тапы по чатам гейтятся
+        // на !isSwitchingChat). Race-safe: finally в selectChatInternal теперь
+        // проверяет chatSwitchJob === myJob и видит null — не вернёт флаг обратно.
+        _isSwitchingChat.value = false
+        _messagesLoaded.value = false
         val exitingChatId = _currentChatId.value
         _currentChatId.value = null
         _messages.value = emptyList()
@@ -1513,4 +1560,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _availableUpdate.value = null
     }
 
+    /**
+     * Вызывается из MainActivity.onStop (приложение свернули). Стопаем всё
+     * тяжёлое чтобы не жечь CPU/GPU/батарею пока экран не виден:
+     *   • cancel-флаги engine (model load / generation / chat switch)
+     *   • Firestore disableNetwork — прекращает gRPC reconnect-попытки
+     *     ("Failed to resolve name" каждые 2-3 сек в логах)
+     *
+     * Не вызываем unloadModel — пользователь может вернуться в любой момент,
+     * заново грузить 3+ ГБ модель в RAM было бы плохой UX. Цель — остановить
+     * АКТИВНЫЕ операции, а не выгрузить состояние.
+     *
+     * UI state (current chat, screen) НЕ трогаем — пользователь должен вернуться
+     * на тот же экран где был.
+     */
+    fun onAppBackgrounded() {
+        android.util.Log.i("MainViewModel", "onAppBackgrounded: cancelling heavy ops")
+        cancelRequested = true
+        engine.cancelLoading()
+        engine.stopGeneration()
+        engine.cancelDecode()  // прерывает llama_decode внутри одного JNI-вызова
+        chatSwitchJob?.cancel()
+        // Не nullируем chatSwitchJob — race-safe finally в selectChatInternal
+        // увидит, что job уже не активный, и не стомпет UI state. На foreground
+        // пользователь сам решит куда идти (тапнет чат → новый switch).
+        analyticsLogger.setNetworkEnabled(false)
+    }
+
+    /**
+     * Вызывается из MainActivity.onStart (приложение разворачивают). Восстанавливаем
+     * сетевые каналы. Heavy ops НЕ перезапускаем — это произойдёт по user-action
+     * (тап чата, сообщение и т.п.).
+     */
+    fun onAppForegrounded() {
+        analyticsLogger.setNetworkEnabled(true)
+    }
 }

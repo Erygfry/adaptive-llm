@@ -64,11 +64,27 @@
     <string name="chat_input_placeholder">Type a message…</string>
     <string name="chat_send">Send</string>
     <string name="chat_stop_generation">Stop generation</string>
-    <string name="chat_thinking_header">Thinking</string>
+    <string name="chat_thinking_header">Thinking mode</string>
     <string name="chat_thinking_auto">Auto</string>
     <string name="chat_thinking_always">Always</string>
     <string name="chat_thinking_off">Off</string>
+    <string name="chat_thinking_auto_hint">for complex questions</string>
+    <string name="chat_thinking_always_hint">slower but more accurate</string>
+    <string name="chat_thinking_off_hint">faster, no reasoning</string>
+    <string name="chat_thinking_steps">Reasoning · %1$d steps</string>
     <string name="chat_check_for_updates">Check for updates</string>
+    <string name="empty_hello">Hi.</string>
+    <string name="empty_question">What would you like to ask?</string>
+    <string name="empty_offline_private">Offline · private</string>
+    <string name="empty_quick_start">Quick start</string>
+    <string name="empty_prompt_code">Explain closures in JavaScript</string>
+    <string name="empty_prompt_write">An email apologizing to a colleague for missing a meeting</string>
+    <string name="empty_prompt_ideas">Birthday gift ideas for mom</string>
+    <string name="empty_prompt_learn">What is entropy, in simple terms</string>
+    <string name="empty_tag_code">CODE</string>
+    <string name="empty_tag_write">WRITE</string>
+    <string name="empty_tag_ideas">IDEAS</string>
+    <string name="empty_tag_learn">LEARN</string>
 
     <!-- ============================================================ -->
     <!-- Update dialog -->
@@ -142,6 +158,8 @@
     <string name="settings_cross_chat_off">Model sees only facts from the current chat. Full isolation between chats — useful for private topics.</string>
     <string name="settings_section_language">Language</string>
     <string name="settings_language_system">System</string>
+    <string name="settings_section_data">Data</string>
+    <string name="settings_export_all">Export all chats</string>
 
     <!-- ============================================================ -->
     <!-- Eviction progress (set via SettingsRepository / EvictionEngine onProgress) -->
@@ -188,4 +206,9 @@
         <item quantity="one">%d day ago</item>
         <item quantity="other">%d days ago</item>
     </plurals>
+    <string name="setup_recommended_label">Recommended</string>
+    <string name="settings_material_you_body">Take colors from device wallpaper (Android 12+). Overrides Mono palette.</string>
+    <string name="facts_from_label">FROM</string>
+    <string name="chat_copy_message">Copy message</string>
+    <string name="markdown_copy_code">Copy code</string>
 </resources>

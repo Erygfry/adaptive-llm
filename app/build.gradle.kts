@@ -17,8 +17,8 @@ android {
         applicationId = "com.example.adaptivellm"
         minSdk = 28
         targetSdk = 36
-        versionCode = 19
-        versionName = "1.1.3"
+        versionCode = 20
+        versionName = "1.1.4"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -35,6 +35,10 @@ android {
                 arguments += "-DGGML_CPU_ALL_VARIANTS=ON"
                 arguments += "-DGGML_LLAMAFILE=OFF"
                 arguments += "-DGGML_VULKAN=ON"
+                // llama.cpp standalone-таргеты не нужны для нашей JNI-сборки,
+                // отключаем чтобы CMake их не собирал (ускорение чистой сборки).
+                arguments += "-DLLAMA_BUILD_APP=OFF"
+                arguments += "-DLLAMA_BUILD_UI=OFF"
             }
         }
     }
@@ -99,6 +103,9 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
+    // Расширенный набор иконок Compose (Outlined.Memory, Outlined.Psychology,
+    // Filled.AutoAwesome) — используются в редизайне (SetupScreen, ChatScreen).
+    implementation("androidx.compose.material:material-icons-extended")
     debugImplementation(libs.compose.ui.tooling)
 
     // Markdown rendering
@@ -127,6 +134,12 @@ dependencies {
     //   tokenizer прямо в .onnx модель — input строка, output embedding. Не нужна
     //   отдельная JNI обёртка для tokenizer'а (DJL HF tokenizers не поддерживает
     //   Android arm64, а pure-Kotlin BPE — много кода и риск багов).
+    // ⚠️ 0.13.0 НЕ содержит 16 KB page alignment fix (Maven Central, 2026-05-22 —
+    //   последняя релизная версия в линейке 0.x). На устройствах с 16 KB страницами
+    //   (Pixel 9+, API 37+) падает с "program alignment (4096) cannot be smaller
+    //   than system page size (16384)" при загрузке
+    //   libonnxruntime_extensions4j_jni.so.
+    //   TODO: обновить как только Microsoft выкатит 0.14+ с фиксом.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-extensions-android:0.13.0")
 

@@ -78,6 +78,22 @@ interface InferenceEngine {
     fun cancelLoading()
 
     /**
+     * Прерывает текущий `llama_decode` на середине через `llama_set_abort_callback`
+     * (зарегистрирован при создании контекста). Без этого один decode-вызов уходит
+     * в нативный compute (Vulkan/CPU) на десятки секунд и не реагирует на
+     * coroutine cancellation. Используется при сворачивании приложения
+     * (`onAppBackgrounded`) и быстром выходе из чата — чтобы JNI не жёг
+     * CPU/GPU фоном.
+     *
+     * Synchronous, fast — только ставит volatile флаг. abort_callback увидит
+     * на следующей проверке внутри llama_decode (typically <100ms). Текущий
+     * decode возвращает ошибку, decode_in_batches возвращает 1, вызывающая
+     * suspend-функция возвращает ненулевой rc. Flag reset'ится автоматически
+     * в начале следующего decode_in_batches.
+     */
+    fun cancelDecode()
+
+    /**
      * Decodes a historical message (already-completed turn) into KV cache without
      * triggering generation. Used during chat switching to replay conversation
      * history so the model has context when user continues the dialog.

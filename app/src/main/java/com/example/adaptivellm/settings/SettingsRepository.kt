@@ -24,6 +24,7 @@ object SettingsRepository {
     private const val KEY_THEME = "theme_mode"
     private const val KEY_CROSS_CHAT_FACTS = "cross_chat_facts_enabled"
     private const val KEY_APP_LANGUAGE = "app_language"
+    private const val KEY_USE_MATERIAL_YOU = "use_material_you"
 
     private lateinit var prefs: SharedPreferences
 
@@ -64,6 +65,11 @@ object SettingsRepository {
     private val _crossChatFactsEnabled = MutableStateFlow(true)
     val crossChatFactsEnabled: StateFlow<Boolean> = _crossChatFactsEnabled.asStateFlow()
 
+    // Если ON — Theme берёт dynamicLight/DarkColorScheme(context) (Android 12+).
+    // Если OFF (default) — используется фиксированная Mono палитра редизайна.
+    private val _useMaterialYou = MutableStateFlow(false)
+    val useMaterialYou: StateFlow<Boolean> = _useMaterialYou.asStateFlow()
+
     /**
      * Инициализирует repository из SharedPreferences. Идемпотентна — повторные
      * вызовы безопасны.
@@ -77,6 +83,7 @@ object SettingsRepository {
         _themeMode.value = runCatching { ThemeMode.valueOf(themeStr) }.getOrDefault(ThemeMode.SYSTEM)
 
         _crossChatFactsEnabled.value = prefs.getBoolean(KEY_CROSS_CHAT_FACTS, true)
+        _useMaterialYou.value = prefs.getBoolean(KEY_USE_MATERIAL_YOU, false)
 
         val langStr = prefs.getString(KEY_APP_LANGUAGE, AppLanguage.SYSTEM.name) ?: AppLanguage.SYSTEM.name
         _appLanguage.value = runCatching { AppLanguage.valueOf(langStr) }.getOrDefault(AppLanguage.SYSTEM)
@@ -95,6 +102,12 @@ object SettingsRepository {
         if (_crossChatFactsEnabled.value == enabled) return
         _crossChatFactsEnabled.value = enabled
         prefs.edit().putBoolean(KEY_CROSS_CHAT_FACTS, enabled).apply()
+    }
+
+    fun setUseMaterialYou(enabled: Boolean) {
+        if (_useMaterialYou.value == enabled) return
+        _useMaterialYou.value = enabled
+        prefs.edit().putBoolean(KEY_USE_MATERIAL_YOU, enabled).apply()
     }
 
     fun setAppLanguage(lang: AppLanguage) {

@@ -15,6 +15,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.ui.res.stringResource
+import com.example.adaptivellm.R
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -286,7 +288,7 @@ private fun CodeBlock(
         ) {
             Icon(
                 CopyIcon,
-                contentDescription = "Copy code",
+                contentDescription = stringResource(R.string.markdown_copy_code),
                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 modifier = Modifier.size(16.dp),
             )

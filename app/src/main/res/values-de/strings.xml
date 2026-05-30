@@ -160,4 +160,9 @@
         <item quantity="one">vor %d Tag</item>
         <item quantity="other">vor %d Tagen</item>
     </plurals>
+    <string name="setup_recommended_label">Empfohlen</string>
+    <string name="settings_material_you_body">Farben vom Geräte-Hintergrundbild übernehmen (Android 12+). Ersetzt die Mono-Palette.</string>
+    <string name="facts_from_label">VON</string>
+    <string name="chat_copy_message">Nachricht kopieren</string>
+    <string name="markdown_copy_code">Code kopieren</string>
 </resources>

@@ -23,6 +23,19 @@ class AnalyticsLogger(private val context: Context) {
     }
     private var sessionId: String = java.util.UUID.randomUUID().toString().take(8)
 
+    /**
+     * Включает/выключает сетевой канал Firestore. При офлайне SDK по умолчанию
+     * пытается ресолвить DNS firestore.googleapis.com каждые ~2-3 сек (видно в
+     * логах как "ManagedChannelImpl: Failed to resolve name") — пустая трата
+     * батареи. На ON_STOP вызываем disableNetwork(), на ON_START — enableNetwork().
+     * Локальные записи продолжают писаться в offline-кэш и автоматически
+     * sync'аются при enable + сети.
+     */
+    fun setNetworkEnabled(enabled: Boolean) {
+        if (enabled) firestore.enableNetwork()
+        else firestore.disableNetwork()
+    }
+
     fun logSessionStart() {
         sessionId = java.util.UUID.randomUUID().toString().take(8)
         logToFirestore("session_start", mapOf(

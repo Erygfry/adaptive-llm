@@ -156,4 +156,9 @@
     <plurals name="time_days_ago">
         <item quantity="other">%d 天前</item>
     </plurals>
+    <string name="setup_recommended_label">推荐</string>
+    <string name="settings_material_you_body">从设备壁纸提取颜色（Android 12+）。覆盖 Mono 调色板。</string>
+    <string name="facts_from_label">来自</string>
+    <string name="chat_copy_message">复制消息</string>
+    <string name="markdown_copy_code">复制代码</string>
 </resources>

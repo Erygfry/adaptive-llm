@@ -25,7 +25,14 @@
 #define LOGw(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 
 // --- Constants ---
-static constexpr int BATCH_SIZE = 512;
+// BATCH_SIZE: размер decode-батча. Влияет на n_batch контекста и granularity
+// цикла в decode_in_batches. На Vulkan один llama_decode = одна compute-graph
+// submission, и abort_callback проверяется между submissions, не внутри. Поэтому
+// крупный batch на Vulkan = долгое ожидание cancel (например, 512 токенов ≈ 20с).
+// Мы держим 64 для приемлемой реакции на cancel при сворачивании приложения /
+// выходе из чата (~1.5-2с worst-case). Trade-off: ~3-5% более slow в обработке
+// длинных prompt'ов из-за overhead на dispatch (≈50мс на submission).
+static constexpr int BATCH_SIZE = 64;
 // Fallback context size used when nativeLoadModel получает nCtx <= 0 (старые
 // callers без RAM tier mapping'а). Реально используемый размер хранится в
 // g_n_ctx ниже — устанавливается при loadModel из Kotlin-стороны по
@@ -58,6 +65,22 @@ static int g_n_ctx = DEFAULT_CONTEXT_SIZE;
 // время load'а (5-10 сек) нажимал back и ждал завершения load'а перед transition'ом.
 // Reset'ится в начале каждого nativeLoadModel.
 static volatile bool g_cancel_load = false;
+
+// Cooperative cancellation flag for decode (chat replay, user prompt processing).
+// Используется через llama_set_abort_callback — llama.cpp периодически проверяет
+// flag во время llama_decode и при true возвращает ошибку, что прерывает batch
+// на середине. БЕЗ этого один llama_decode уходит в нативный compute (Vulkan/CPU)
+// на десятки секунд и не отвечает на Kotlin-level cancel (coroutine cancellation
+// работает только МЕЖДУ JNI-вызовами, не внутри одного).
+//
+// Set'ится из nativeCancelDecode (Kotlin вызывает на сворачивании приложения и
+// выходе из чата). Reset'ится в начале каждого decode_in_batches — следующая
+// decode-операция стартует «свежей», даже если предыдущая была отменена.
+static volatile bool g_cancel_decode = false;
+
+static bool decode_abort_callback(void * /*user_data*/) {
+    return g_cancel_decode;
+}
 
 // Chat state
 // =============================================================================
@@ -333,8 +356,23 @@ static std::string chat_format_for_history(const std::string &role, const std::s
 
 static int decode_in_batches(const llama_tokens &tokens, llama_pos start, bool logit_last = false)
 {
+    // Сбрасываем cancel flag — каждая decode-операция стартует «свежей».
+    // Если предыдущая была отменена (g_cancel_decode = true), для следующей
+    // мы хотим нормального decode'а.
+    g_cancel_decode = false;
     for (int i = 0; i < (int)tokens.size(); i += BATCH_SIZE)
     {
+        // Явный check между батчами — дополняет abort_callback на случай если
+        // тот не среагировал внутри предыдущего llama_decode (бэкенд может
+        // дёргать callback не очень часто). Гарантирует, что после cancel'а
+        // следующий батч точно не запустится.
+        if (g_cancel_decode)
+        {
+            LOGi("decode_in_batches: cancelled at batch %d/%d (pos=%d)",
+                 i / BATCH_SIZE, ((int)tokens.size() + BATCH_SIZE - 1) / BATCH_SIZE,
+                 (int)(start + i));
+            return 1;
+        }
         const int n = std::min((int)tokens.size() - i, BATCH_SIZE);
         common_batch_clear(g_batch);
 
@@ -594,6 +632,10 @@ extern "C"
             g_model = nullptr;
             return 2;
         }
+        // Регистрируем abort callback — позволяет прервать llama_decode в любой
+        // момент через g_cancel_decode flag (используется при сворачивании
+        // приложения, чтобы не жечь CPU/GPU фоном после minimize).
+        llama_set_abort_callback(g_context, decode_abort_callback, nullptr);
 
         g_batch = llama_batch_init(BATCH_SIZE, 0, 1);
         g_batch_initialized = true;
@@ -1073,6 +1115,20 @@ extern "C"
     {
         g_cancel_load = true;
         LOGi("nativeCancelLoading: flag set, current load (if any) will abort");
+    }
+
+    // Sets g_cancel_decode = true. abort_callback (зарегистрирован через
+    // llama_set_abort_callback при создании context'а) увидит флаг при следующей
+    // проверке внутри llama_decode и прервёт текущий decode-batch на середине
+    // (без этого один llama_decode на 369-токенном сообщении уходит в Vulkan
+    // на ~50 сек, не реагируя на coroutine cancellation).
+    // No-op если decode не идёт. Flag reset'ится автоматически в decode_in_batches.
+    JNIEXPORT void JNICALL
+    Java_com_example_adaptivellm_inference_InferenceEngineImpl_nativeCancelDecode(
+        JNIEnv *, jobject)
+    {
+        g_cancel_decode = true;
+        LOGi("nativeCancelDecode: flag set, current decode (if any) will abort");
     }
 
     // =============================================================================
