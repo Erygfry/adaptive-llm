@@ -176,6 +176,7 @@ object EvictionEngine {
         currentThinkingMode: Int,
         onProgress: (String) -> Unit = {},
         onTokenProgress: (Float?) -> Unit = {},
+        onSoftError: (kind: String, where: String, details: Map<String, Any>) -> Unit = { _, _, _ -> },
     ): Boolean {
         val currentKvTokens = engine.getCurrentPos()
         val mergeCount = ChatRepository.getSummary(chatId)?.mergeCount ?: 0
@@ -185,7 +186,7 @@ object EvictionEngine {
         Log.i(TAG, "Eviction triggered: chatId=$chatId, current_pos=$currentKvTokens, " +
                    "T_max=$tMax (mergeCount=$mergeCount)")
         return runEviction(context, chatId, engine, ramTier, systemPrompt, snapshotBase,
-                           modelKey, nCtx, currentThinkingMode, onProgress, onTokenProgress)
+                           modelKey, nCtx, currentThinkingMode, onProgress, onTokenProgress, onSoftError)
     }
 
     /**
@@ -194,6 +195,11 @@ object EvictionEngine {
      * что после replay KV переполнится — запуск ДО replay'я экономит wasted decode.
      *
      * Reuses всю state machine A→D + conflict resolution из [runEvictionInternal].
+     *
+     * [onSoftError] — callback для записи аномалий в soft_errors-коллекцию.
+     * Кидается в двух местах: extraction_parse_failed (GBNF не смог удержать
+     * JSON) и eviction_failed (любой другой Exception в state machine).
+     * Default no-op, чтобы legacy-вызовы и тесты не падали.
      */
     suspend fun runEviction(
         context: Context,
@@ -207,6 +213,7 @@ object EvictionEngine {
         currentThinkingMode: Int,
         onProgress: (String) -> Unit = {},
         onTokenProgress: (Float?) -> Unit = {},
+        onSoftError: (kind: String, where: String, details: Map<String, Any>) -> Unit = { _, _, _ -> },
     ): Boolean {
         // NB: первый onProgress («Создание профиля памяти...» или «Сжатие
         // истории чата...») выставляет MainViewModel ДО вызова — он знает
@@ -216,11 +223,30 @@ object EvictionEngine {
         try {
             runEvictionInternal(
                 context, chatId, engine, ramTier, systemPrompt, snapshotBase,
-                modelKey, nCtx, currentThinkingMode, onProgress, onTokenProgress,
+                modelKey, nCtx, currentThinkingMode, onProgress, onTokenProgress, onSoftError,
             )
             return true
+        } catch (e: ExtractionParseException) {
+            // Уже залогировано в runEvictionInternal как extraction_parse_failed —
+            // не дублируем eviction_failed. Делаем rollback и выходим.
+            Log.e(TAG, "Eviction failed (parse) for chatId=$chatId — rolling back state to idle", e)
+            try { ChatRepository.setEvictionState(chatId, "idle") } catch (_: Exception) {}
+            try { engine.clearGrammar() } catch (_: Exception) {}
+            try { engine.setThinkingMode(currentThinkingMode) } catch (_: Exception) {}
+            try { onTokenProgress(null) } catch (_: Exception) {}
+            return false
         } catch (e: Exception) {
             Log.e(TAG, "Eviction failed for chatId=$chatId — rolling back state to idle", e)
+            onSoftError(
+                "eviction_failed",
+                "EvictionEngine.runEviction",
+                mapOf(
+                    "chat_id" to chatId,
+                    "ram_tier" to ramTier.name,
+                    "error" to (e.message ?: "unknown").take(200),
+                    "exception" to (e.javaClass.simpleName ?: ""),
+                ),
+            )
             try { ChatRepository.setEvictionState(chatId, "idle") } catch (_: Exception) {}
             try { engine.clearGrammar() } catch (_: Exception) {}
             try { engine.setThinkingMode(currentThinkingMode) } catch (_: Exception) {}
@@ -228,6 +254,13 @@ object EvictionEngine {
             return false
         }
     }
+
+    /**
+     * Спецификализированное исключение для JSON-parse-failure в extraction'е.
+     * Позволяет outer catch в [runEviction] не дублировать soft-error
+     * (parse-fail уже залогирован на месте, в outer хотим только rollback).
+     */
+    private class ExtractionParseException(msg: String) : IllegalStateException(msg)
 
     private suspend fun runEvictionInternal(
         context: Context,
@@ -241,6 +274,7 @@ object EvictionEngine {
         currentThinkingMode: Int,
         onProgress: (String) -> Unit,
         onTokenProgress: (Float?) -> Unit,
+        onSoftError: (kind: String, where: String, details: Map<String, Any>) -> Unit = { _, _, _ -> },
     ) {
         // ─── Шаг 4.1 — определение evicted блока ─────────────────────────
         val summary = ChatRepository.getSummary(chatId)
@@ -336,8 +370,27 @@ object EvictionEngine {
             val json = try {
                 JSONObject(cleanedJson)
             } catch (e: Exception) {
-                error("Extraction output is not valid JSON (GBNF should prevent this): ${e.message}, " +
-                      "raw=${rawOutput.take(500)}")
+                // Если упало здесь — значит GBNF не сработал (gguf decode produced
+                // tokens вне грамматики). Бывает на сильно урезанных тирах или
+                // когда модель «зациклилась» на одном токене. Пишем raw head в
+                // soft_errors для дебага — без этого по логу не понять что
+                // именно модель выдала.
+                onSoftError(
+                    "extraction_parse_failed",
+                    "EvictionEngine.runEvictionInternal.jsonParse",
+                    mapOf(
+                        "chat_id" to chatId,
+                        "ram_tier" to ramTier.name,
+                        "merge_count" to summary.mergeCount,
+                        "raw_len" to rawOutput.length,
+                        "raw_head" to rawOutput.take(500),
+                        "error" to (e.message ?: "unknown").take(200),
+                    ),
+                )
+                throw ExtractionParseException(
+                    "Extraction output is not valid JSON (GBNF should prevent this): ${e.message}, " +
+                    "raw=${rawOutput.take(500)}"
+                )
             }
 
             val summaryObj = json.getJSONObject("summary")

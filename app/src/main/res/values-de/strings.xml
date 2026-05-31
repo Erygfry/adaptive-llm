@@ -165,4 +165,5 @@
     <string name="facts_from_label">VON</string>
     <string name="chat_copy_message">Nachricht kopieren</string>
     <string name="markdown_copy_code">Code kopieren</string>
+    <string name="download_error_all_mirrors_failed">HuggingFace und Spiegel nicht erreichbar. Internet prüfen oder VPN versuchen.</string>
 </resources>

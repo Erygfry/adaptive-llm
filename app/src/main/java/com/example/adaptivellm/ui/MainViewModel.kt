@@ -664,7 +664,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             for (i in 0 until LOAD_POLL_ITERATIONS) {
                 kotlinx.coroutines.delay(LOAD_POLL_TICK_MS)
                 if (engine.state.value is InferenceEngine.State.ModelLoaded) return true
-                if (engine.state.value is InferenceEngine.State.Error) return false
+                if (engine.state.value is InferenceEngine.State.Error) {
+                    analyticsLogger.logSoftError(
+                        kind = "model_load_failed",
+                        where = "ensureModelLoaded.waitForOngoing",
+                        details = mapOf(
+                            "model_name" to _selectedModel.value.displayName,
+                            "state" to engine.state.value::class.simpleName.orEmpty(),
+                        ),
+                    )
+                    return false
+                }
                 if (engine.state.value is InferenceEngine.State.Ready) break // загрузка отменена
             }
         }
@@ -681,8 +691,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             kotlinx.coroutines.delay(LOAD_POLL_TICK_MS)
             val state = engine.state.value
             if (state is InferenceEngine.State.ModelLoaded) return true
-            if (state is InferenceEngine.State.Error) return false
+            if (state is InferenceEngine.State.Error) {
+                analyticsLogger.logSoftError(
+                    kind = "model_load_failed",
+                    where = "ensureModelLoaded.afterTrigger",
+                    details = mapOf(
+                        "model_name" to _selectedModel.value.displayName,
+                        "state" to "Error",
+                    ),
+                )
+                return false
+            }
         }
+        // Polling timeout — модель не загрузилась за LOAD_POLL_ITERATIONS тиков,
+        // но и в Error не вышла. Скорее всего CPU eviction застрял или Vulkan
+        // повис на init'е. Это «не закончилось как надо» — пишем в soft_errors.
+        analyticsLogger.logSoftError(
+            kind = "model_load_failed",
+            where = "ensureModelLoaded.pollingTimeout",
+            details = mapOf(
+                "model_name" to _selectedModel.value.displayName,
+                "final_state" to engine.state.value::class.simpleName.orEmpty(),
+                "ram_tier" to deviceProfile.ramTier.name,
+            ),
+        )
         return false
     }
 
@@ -830,49 +862,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Engine получает DIRTY form — это попадёт в KV cache в виде с обёртками,
             // что нужно для cache_prompt prefix matching на следующих turn'ах
             // (architecture.md § Что попадает в KV cache между turn'ами).
-            engine.sendMessage(dirtyUserMsg).collect { token ->
-                responseBuilder.append(token)
-                tokenCount++
+            // Generation может упасть с Exception (Vulkan crash, OOM, context overflow) —
+            // ловим, отделяем от cancellation, логируем soft-error, UI остаётся живым.
+            try {
+                engine.sendMessage(dirtyUserMsg).collect { token ->
+                    responseBuilder.append(token)
+                    tokenCount++
 
-                val elapsed = (System.currentTimeMillis() - startTime) / 1000f
-                if (elapsed > 0) {
-                    _tokensPerSecond.value = tokenCount / elapsed
+                    val elapsed = (System.currentTimeMillis() - startTime) / 1000f
+                    if (elapsed > 0) {
+                        _tokensPerSecond.value = tokenCount / elapsed
+                    }
+
+                    // Split thinking from visible response
+                    val raw = responseBuilder.toString()
+                    val thinkMatch = thinkRegex.find(raw)
+                    val thinkContent: String
+                    val displayText: String
+                    if (thinkMatch != null) {
+                        // AUTO mode: model included both <think>...</think>
+                        thinkContent = thinkMatch.groupValues[1].trim()
+                        displayText = raw.replace(thinkRegex, "").trim()
+                    } else if (raw.contains("<think>")) {
+                        // AUTO mode: <think> started but not yet closed
+                        thinkContent = raw.substringAfter("<think>").trim()
+                        displayText = ""
+                    } else if (thinkingActive && raw.contains("</think>")) {
+                        // ALWAYS mode: opening <think> is in the prompt, not in generated text
+                        thinkContent = raw.substringBefore("</think>").trim()
+                        displayText = raw.substringAfter("</think>").trim()
+                    } else if (thinkingActive && !raw.contains("</think>")) {
+                        // ALWAYS mode: still generating thinking (no </think> yet)
+                        thinkContent = raw.trim()
+                        displayText = ""
+                    } else {
+                        thinkContent = ""
+                        displayText = raw.trim()
+                    }
+                    finalDisplayText = displayText
+
+                    val updated = _messages.value.toMutableList()
+                    updated[updated.lastIndex] = ChatMessage(
+                        text = displayText,
+                        isUser = false,
+                        thinkingText = thinkContent,
+                    )
+                    _messages.value = updated
                 }
-
-                // Split thinking from visible response
-                val raw = responseBuilder.toString()
-                val thinkMatch = thinkRegex.find(raw)
-                val thinkContent: String
-                val displayText: String
-                if (thinkMatch != null) {
-                    // AUTO mode: model included both <think>...</think>
-                    thinkContent = thinkMatch.groupValues[1].trim()
-                    displayText = raw.replace(thinkRegex, "").trim()
-                } else if (raw.contains("<think>")) {
-                    // AUTO mode: <think> started but not yet closed
-                    thinkContent = raw.substringAfter("<think>").trim()
-                    displayText = ""
-                } else if (thinkingActive && raw.contains("</think>")) {
-                    // ALWAYS mode: opening <think> is in the prompt, not in generated text
-                    thinkContent = raw.substringBefore("</think>").trim()
-                    displayText = raw.substringAfter("</think>").trim()
-                } else if (thinkingActive && !raw.contains("</think>")) {
-                    // ALWAYS mode: still generating thinking (no </think> yet)
-                    thinkContent = raw.trim()
-                    displayText = ""
-                } else {
-                    thinkContent = ""
-                    displayText = raw.trim()
-                }
-                finalDisplayText = displayText
-
-                val updated = _messages.value.toMutableList()
-                updated[updated.lastIndex] = ChatMessage(
-                    text = displayText,
-                    isUser = false,
-                    thinkingText = thinkContent,
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // User-initiated stop / cancel — не error, не логируем.
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "Generation failed", e)
+                analyticsLogger.logSoftError(
+                    kind = "generation_failed",
+                    where = "sendMessage.collect",
+                    details = mapOf(
+                        "chat_id" to chatId,
+                        "tokens_emitted" to tokenCount,
+                        "elapsed_ms" to (System.currentTimeMillis() - startTime),
+                        "backend" to _backendInfo.value,
+                        "thinking_mode" to _thinkingMode.value,
+                        "error" to (e.message ?: "unknown").take(200),
+                        "exception" to (e.javaClass.simpleName ?: ""),
+                    ),
                 )
-                _messages.value = updated
+                // Заменяем bubble на error-сообщение, чтобы пользователь не висел
+                // с пустым assistant-bubble.
+                val updated = _messages.value.toMutableList()
+                if (updated.isNotEmpty() && !updated.last().isUser) {
+                    updated[updated.lastIndex] = ChatMessage(
+                        text = "⚠️ ${e.message ?: "generation error"}",
+                        isUser = false,
+                    )
+                    _messages.value = updated
+                }
             }
 
             _isGenerating.value = false
@@ -981,6 +1045,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 currentThinkingMode = _thinkingMode.value,
                 onProgress = { status -> _evictionStatus.value = status },
                 onTokenProgress = { p -> _evictionProgress.value = p },
+                // Eviction-internal catches Exception; soft-errors доходят сюда
+                // только через callback. CancellationException всё ещё пробрасывается
+                // и попадёт в outer catch ниже.
+                onSoftError = { kind, where, details ->
+                    analyticsLogger.logSoftError(kind, "maybeRunEviction:$where",
+                        details + mapOf(
+                            "current_pos" to currentPos,
+                            "t_max" to tMax,
+                        ))
+                },
             )
             // После eviction'а KV изменился — обновим totalTokens для UI
             _totalTokens.value = engine.getCurrentPos()
@@ -1110,6 +1184,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val modelReady = ensureModelLoaded()
             if (!modelReady) {
                 android.util.Log.e("MainViewModel", "selectChat: model load failed/cancelled")
+                // Уже залогировано на уровне ensureModelLoaded (там точнее
+                // известно полная причина: Error vs polling timeout).
                 // Race-safe: не стомпаем screen, если пользователь уже куда-то ушёл
                 // или запустил новый switch — иначе выбьем активный Job наружу.
                 if (chatSwitchJob === coroutineContext[kotlinx.coroutines.Job]) {
@@ -1242,6 +1318,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         currentThinkingMode = _thinkingMode.value,
                         onProgress = { status -> _evictionStatus.value = status },
                         onTokenProgress = { p -> _evictionProgress.value = p },
+                        // runEviction ловит Exception сама и возвращает false — этот
+                        // catch ниже отработает только для CancellationException (back).
+                        // Soft-errors пишутся через callback изнутри EvictionEngine.
+                        onSoftError = { kind, where, details ->
+                            analyticsLogger.logSoftError(kind, "preReplay:$where", details)
+                        },
                     )
                 } catch (e: Exception) {
                     android.util.Log.e("MainViewModel", "Pre-replay eviction failed", e)
@@ -1253,6 +1335,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 // Replay истории в KV (либо full если уровень 2/3, либо tail если уровень 1).
                 // На ошибке (context overflow) — прерываем, UI остаётся consistent.
+                var replayedCount = 0
                 for (row in messagesToReplay) {
                     val rc = engine.addMessageToHistory(row.role, row.content)
                     if (rc != 0) {
@@ -1260,8 +1343,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             "MainViewModel",
                             "Chat replay stopped at message ${row.id} (role=${row.role}, rc=$rc) — KV state truncated"
                         )
+                        analyticsLogger.logSoftError(
+                            kind = "kv_replay_truncated",
+                            where = "selectChatInternal.replayLoop",
+                            details = mapOf(
+                                "chat_id" to chatId,
+                                "stopped_at_msg_id" to row.id,
+                                "stopped_role" to row.role,
+                                "rc" to rc,
+                                "replayed_count" to replayedCount,
+                                "total_to_replay" to messagesToReplay.size,
+                            ),
+                        )
                         break
                     }
+                    replayedCount++
                 }
             }
 
@@ -1286,6 +1382,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             throw e  // rethrow обязателен — structured concurrency
         } catch (e: Exception) {
             android.util.Log.e("MainViewModel", "selectChat failed for id=$chatId", e)
+            analyticsLogger.logSoftError(
+                kind = "chat_switch_failed",
+                where = "selectChatInternal",
+                details = mapOf(
+                    "chat_id" to chatId,
+                    "is_new" to isNew,
+                    "error" to (e.message ?: "unknown").take(200),
+                    "exception" to (e.javaClass.simpleName ?: ""),
+                ),
+            )
             if (chatSwitchJob === coroutineContext[kotlinx.coroutines.Job]) {
                 _screen.value = AppScreen.ChatList
             }

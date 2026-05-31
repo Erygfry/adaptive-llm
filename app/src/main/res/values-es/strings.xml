@@ -165,4 +165,5 @@
     <string name="facts_from_label">DESDE</string>
     <string name="chat_copy_message">Copiar mensaje</string>
     <string name="markdown_copy_code">Copiar código</string>
+    <string name="download_error_all_mirrors_failed">No se pudo conectar a HuggingFace ni a su espejo. Comprueba la conexión o usa una VPN.</string>
 </resources>

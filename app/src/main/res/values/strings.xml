@@ -211,4 +211,5 @@
     <string name="facts_from_label">FROM</string>
     <string name="chat_copy_message">Copy message</string>
     <string name="markdown_copy_code">Copy code</string>
+    <string name="download_error_all_mirrors_failed">Couldn\'t reach HuggingFace or its mirror. Check your internet or try a VPN.</string>
 </resources>

@@ -1,6 +1,7 @@
 package com.example.adaptivellm.model
 
 import android.content.Context
+import com.example.adaptivellm.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -90,13 +91,27 @@ class ModelDownloader(private val context: Context) {
         emit(DownloadState.Complete(getLocalPath(variant)))
     }.flowOn(Dispatchers.IO)
 
+    /**
+     * Список хостов, с которых пытаемся скачать в порядке приоритета.
+     *   1. `huggingface.co` — первичный (быстрее для не-РФ пользователей)
+     *   2. `hf-mirror.com` — китайский reverse-proxy для HF, fallback на случай
+     *      блокировки HF (актуально для РФ с 2024 — SNI-блок Роскомнадзора).
+     *
+     * Файлы на mirror'е идентичны HF (он проксирует), поэтому Range-resume между
+     * хостами совместимый: если HF успел отдать N байт и упал, mirror продолжит
+     * с offset=N без перекачки.
+     *
+     * Если в будущем потребуется свой mirror (Cloudflare R2 / Yandex Object Storage /
+     * GitHub Releases) — добавить хост сюда, fallback-логика подхватит автоматически.
+     */
+    private val MIRROR_HOSTS = listOf("huggingface.co", "hf-mirror.com")
+
     private fun downloadFile(
         repo: String,
         fileName: String,
         expectedSizeMb: Long,
         label: String,
     ): Flow<DownloadState> = flow {
-        val url = "https://huggingface.co/$repo/resolve/main/$fileName"
         val outFile = File(context.filesDir, fileName)
         val tempFile = File(context.filesDir, "$fileName.part")
 
@@ -106,73 +121,95 @@ class ModelDownloader(private val context: Context) {
             return@flow
         }
 
-        try {
-            // Check free space
-            val freeSpaceMb = context.filesDir.freeSpace / (1024 * 1024)
-            if (freeSpaceMb < expectedSizeMb * 1.1) {
-                emit(DownloadState.Error(
-                    "Not enough space. Need $expectedSizeMb MB, have $freeSpaceMb MB free"
-                ))
-                return@flow
+        // Check free space (host-independent)
+        val freeSpaceMb = context.filesDir.freeSpace / (1024 * 1024)
+        if (freeSpaceMb < expectedSizeMb * 1.1) {
+            emit(DownloadState.Error(
+                "Not enough space. Need $expectedSizeMb MB, have $freeSpaceMb MB free"
+            ))
+            return@flow
+        }
+
+        // Пробуем хосты по очереди. На connect-level ошибке (timeout/SSL/DNS) —
+        // переключаемся на следующий. На HTTP-ошибке (4xx/5xx) — отдаём её сразу,
+        // потому что mirror даст такой же ответ (mirror проксирует те же файлы).
+        var lastConnectError: Throwable? = null
+
+        for ((index, host) in MIRROR_HOSTS.withIndex()) {
+            val url = "https://$host/$repo/resolve/main/$fileName"
+            if (index > 0) {
+                android.util.Log.i("ModelDownloader",
+                    "Primary failed (${lastConnectError?.javaClass?.simpleName}), " +
+                    "trying fallback host: $host")
             }
 
-            // Resume support
-            val existingBytes = if (tempFile.exists()) tempFile.length() else 0L
+            try {
+                // Resume support — учитываем уже скачанные байты (от любого предыдущего
+                // успешного host'а — mirror обслужит тот же файл по offset)
+                val existingBytes = if (tempFile.exists()) tempFile.length() else 0L
+                val requestBuilder = Request.Builder().url(url)
+                if (existingBytes > 0) {
+                    requestBuilder.header("Range", "bytes=$existingBytes-")
+                }
 
-            val requestBuilder = Request.Builder().url(url)
-            if (existingBytes > 0) {
-                requestBuilder.header("Range", "bytes=$existingBytes-")
-            }
+                val response = client.newCall(requestBuilder.build()).execute()
 
-            val response = client.newCall(requestBuilder.build()).execute()
+                if (!response.isSuccessful && response.code != 206) {
+                    // HTTP-ошибка — не сетевая блокировка, mirror даст такой же.
+                    emit(DownloadState.Error("HTTP ${response.code}: ${response.message}"))
+                    response.close()
+                    return@flow
+                }
 
-            if (!response.isSuccessful && response.code != 206) {
-                emit(DownloadState.Error("HTTP ${response.code}: ${response.message}"))
-                response.close()
-                return@flow
-            }
+                val body = response.body ?: run {
+                    emit(DownloadState.Error("Empty response body"))
+                    response.close()
+                    return@flow
+                }
 
-            val body = response.body ?: run {
-                emit(DownloadState.Error("Empty response body"))
-                return@flow
-            }
+                val contentLength = body.contentLength()
+                val totalBytes = if (response.code == 206) existingBytes + contentLength
+                                  else contentLength
+                val appendMode = response.code == 206
 
-            val contentLength = body.contentLength()
-            val totalBytes = if (response.code == 206) {
-                existingBytes + contentLength
-            } else {
-                contentLength
-            }
+                FileOutputStream(tempFile, appendMode).use { fos ->
+                    body.byteStream().use { input ->
+                        val buffer = ByteArray(65536) // 64 KB buffer for faster downloads
+                        var downloaded = if (appendMode) existingBytes else 0L
+                        var lastEmitTime = System.currentTimeMillis()
 
-            val appendMode = response.code == 206
-            FileOutputStream(tempFile, appendMode).use { fos ->
-                body.byteStream().use { input ->
-                    val buffer = ByteArray(65536) // 64 KB buffer for faster downloads
-                    var downloaded = if (appendMode) existingBytes else 0L
-                    var lastEmitTime = System.currentTimeMillis()
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read == -1) break
+                            fos.write(buffer, 0, read)
+                            downloaded += read
 
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read == -1) break
-                        fos.write(buffer, 0, read)
-                        downloaded += read
-
-                        // Emit progress at most every 200ms to avoid UI thrashing
-                        val now = System.currentTimeMillis()
-                        if (now - lastEmitTime >= 200 || downloaded == totalBytes) {
-                            emit(DownloadState.Progress(downloaded, totalBytes, label))
-                            lastEmitTime = now
+                            // Emit progress at most every 200ms to avoid UI thrashing
+                            val now = System.currentTimeMillis()
+                            if (now - lastEmitTime >= 200 || downloaded == totalBytes) {
+                                emit(DownloadState.Progress(downloaded, totalBytes, label))
+                                lastEmitTime = now
+                            }
                         }
                     }
                 }
+                response.close()
+
+                // Success — rename .part в финальное имя и выход
+                tempFile.renameTo(outFile)
+                return@flow
+
+            } catch (e: java.io.IOException) {
+                // Connection-level ошибка (timeout/SSL/DNS/reset). Пробуем следующий
+                // хост. Если уже все перебрали — выйдем из цикла и emit ошибку.
+                lastConnectError = e
             }
-            response.close()
-
-            // Rename temp file to final
-            tempFile.renameTo(outFile)
-
-        } catch (e: Exception) {
-            emit(DownloadState.Error("$label: ${e.message ?: "Download failed"}"))
         }
+
+        // Все хосты упали с connect-level ошибкой → пользователь видит локализованный
+        // hint про VPN, в скобках техническая деталь для отладки.
+        val techDetail = lastConnectError?.message ?: "unknown"
+        val userMsg = context.getString(R.string.download_error_all_mirrors_failed)
+        emit(DownloadState.Error("$label: $userMsg ($techDetail)"))
     }
 }

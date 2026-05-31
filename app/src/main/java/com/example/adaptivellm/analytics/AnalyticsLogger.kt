@@ -206,6 +206,49 @@ class AnalyticsLogger(private val context: Context) {
             .set(doc)
     }
 
+    /**
+     * «Мягкие» ошибки — операции которые закончились не так, как должны, но это
+     * не краш приложения (Crashlytics такое не ловит). Примеры:
+     *   - модель не загрузилась (ensureModelLoaded вернула false);
+     *   - переключение чата упало с Exception, но мы откатились на ChatList;
+     *   - KV-replay вернул truncate-код;
+     *   - eviction-job выкинул исключение;
+     *   - GBNF-парсер не разобрал JSON фактов.
+     *
+     * Пишем в ОТДЕЛЬНУЮ коллекцию `soft_errors/` — не мешаем аналитике
+     * (события user-flow в `events/`), и проще выставить retention/quota
+     * отдельно. Схема параллельная events: device_id, session_id, timestamp,
+     * app_version, device_model, android_sdk + kind/where + произвольный
+     * details map с контекстом (model_name, backend, error.message head, etc).
+     *
+     * Crashlytics НЕ дублируем — это не unhandled-exception, мы знаем что
+     * случилось и хотим только статистику, не stack-trace.
+     *
+     * Firestore rules: коллекция `soft_errors` должна быть открыта на
+     * `allow create` так же, как `events` (см. firestore.rules).
+     */
+    fun logSoftError(
+        kind: String,
+        where: String,
+        details: Map<String, Any> = emptyMap(),
+    ) {
+        val doc = details.toMutableMap()
+        doc["kind"] = kind
+        doc["where"] = where
+        doc["device_id"] = deviceId
+        doc["session_id"] = sessionId
+        doc["timestamp"] = com.google.firebase.Timestamp.now()
+        doc["app_version"] = try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
+        } catch (_: Exception) { "" }
+        doc["device_model"] = Build.MODEL
+        doc["android_sdk"] = Build.VERSION.SDK_INT
+
+        firestore.collection("soft_errors")
+            .document("$kind-${System.currentTimeMillis()}")
+            .set(doc)
+    }
+
     // --- Helpers ---
 
     fun getBatteryPercent(): Int {

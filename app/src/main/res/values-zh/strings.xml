@@ -161,4 +161,5 @@
     <string name="facts_from_label">来自</string>
     <string name="chat_copy_message">复制消息</string>
     <string name="markdown_copy_code">复制代码</string>
+    <string name="download_error_all_mirrors_failed">无法连接 HuggingFace 或其镜像。请检查网络或尝试 VPN。</string>
 </resources>

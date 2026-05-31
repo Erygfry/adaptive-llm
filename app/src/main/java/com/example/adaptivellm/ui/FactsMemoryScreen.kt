@@ -138,6 +138,9 @@ fun FactsMemoryScreen(viewModel: MainViewModel) {
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            // Маленький воздух между хедером и чипами категорий — без него
+            // чипы визуально «прилипают» к нижней границе TopAppBar.
+            Spacer(modifier = Modifier.height(10.dp))
             FilterChipRow(
                 selected = filter,
                 onSelected = { viewModel.setFactsFilter(it) },
